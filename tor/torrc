@@ -1,0 +1,93 @@
+##=================== /etc/torrc =====================##
+# https://www.torproject.org/docs/tor-manual.html.en
+
+# Run Tor as a regular user (do not change this)
+User tor
+DataDirectory /var/lib/tor
+
+# Server's public IP Address (usually automatic)
+#Address 10.10.10.10
+
+# Port to advertise for incoming Tor connections.
+#ORPort 9001                  # common ports are 9001, 443
+#ORPort [IPv6-address]:9001
+
+# Mirror directory information for others (optional, not used on bridge)
+#DirPort 9030                 # common ports are 9030, 80
+
+# Run Tor only as a server (no local applications)
+#SocksPort 0
+#ControlSocket 0
+
+
+## Run Tor as obfuscated bridge
+# https://trac.torproject.org/projects/tor/wiki/doc/PluggableTransports/obfs4proxy
+#ServerTransportPlugin obfs4 exec /usr/local/bin/obfs4proxy
+#ServerTransportListenAddr obfs4  0.0.0.0:54444
+#ExtORPort auto
+#BridgeRelay 1
+
+## If no Nickname or ContactInfo is set, docker-entrypoint will use
+## the environment variables to add Nickname/ContactInfo below
+#Nickname TTTor4exampe                 # only use letters and numbers
+#ContactInfo tor4@example.org
+
+## Use meek-server
+#ServerTransportPlugin meek exec /usr/local/bin/meek-server --port 7002 --cert cert.pem --key key.pem
+
+UseBridges 1
+ClientTransportPlugin obfs4 exec /usr/bin/lyrebird
+#ClientTransportPlugin snowflake exec /usr/bin/snowflake-proxy
+#ClientTransportPlugin webtunnel exec /usr/bin/lyrebird
+
+ExcludeExitNodes {ru},{by},{kz}
+
+%include /etc/tor/bridges.txt
+
+# SOCKS порт для клиентов
+SocksPort 0.0.0.0:9050
+#SocksTimeout 30
+SocksPolicy accept 192.168.0.0/16
+SocksPolicy accept 172.16.0.0/12
+SocksPolicy accept 127.0.0.0/8
+SocksPolicy accept 10.0.0.0/8
+SocksPolicy reject *
+
+
+# Control port для управления
+#ControlPort 9051
+#CookieAuthentication 1
+
+# Логирование
+#Log notice file /var/log/tor/tor.log
+
+# Безопасность
+#SafeLogging 1
+
+# быстрее выбирать узлы
+#CircuitBuildTimeout 15
+#LearnCircuitBuildTimeout 1
+
+# использовать цепочку дольше (меньше перестроений)
+MaxCircuitDirtiness 600
+
+# больше соединений
+ConnLimit 128
+
+# быстрее держать соединения активными
+KeepalivePeriod 180
+
+# больше потоков в одной цепочке
+MaxClientCircuitsPending 128
+
+# ускоряет загрузку директорий
+#UseEntryGuards 1
+#NumEntryGuards 8
+
+# чаще строить новые цепочки
+#NewCircuitPeriod 15
+
+
+#Log debug stdout
+
+Nickname Tor4aaxuojie

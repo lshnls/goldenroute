@@ -1,0 +1,92 @@
+# version: '3.8'
+
+x-proxy-env: &proxy-env
+  environment:
+    LL_IPV4_ADDR: "${LL_IPV4_ADDR:-127.0.0.1}"
+    LLP_SOCKS5_PROXY: "${LLP_SOCKS5_PROXY:-41080}"
+    LLP_HTTP_PROXY: "${LLP_HTTP_PROXY:-43128}"
+
+
+# LL_IPV4_ADDR="127.0.0.1"
+# IP-адрес хоста с прокси (по умолчанию 127.0.0.1)
+# если 0,0,0,0 то НЕОБХОДИМА установка параметра PAC_PROXY_HOST !
+# LLP_SOCKS5_PROXY="31080"
+# порт SOCKS5 (по умолчанию 31080)
+# LLP_HTTP_PROXY="33128"
+# порт HTTP-прокси (по умолчанию 33128)
+# если 0,0,0,0 то необходимы
+#
+
+services:
+  wstunnel:
+    image: ghcr.io/erebe/wstunnel:latest
+    restart: unless-stopped
+    <<: *proxy-env 
+    command: >
+      /home/app/wstunnel client
+      --local-to-remote socks5://0.0.0.0:1080
+      --local-to-remote http://0.0.0.0:3128
+      ws://nginx:80
+    ports:
+      - "${LL_IPV4_ADDR}:${LLP_SOCKS5_PROXY}:1080"
+      - "${LL_IPV4_ADDR}:${LLP_HTTP_PROXY}:3128"
+  fw:
+    build:
+      context: ./fw
+      dockerfile: Dockerfile
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    restart: unless-stopped
+    depends_on:
+      wstunnel:
+        condition: service_started
+
+  nginx:
+    image: docker.io/nginx:alpine
+    # container_name: nginx-pac
+    restart: unless-stopped
+    volumes:
+      - ./nginx/entrypoint.sh:/entrypoint.sh:ro
+      - ./nginx/backends.list:/etc/nginx/backends.list:ro
+    entrypoint: |
+      sh -c "
+        cp /entrypoint.sh /tmp/ &&
+        chmod +x /tmp/entrypoint.sh &&
+        /tmp/entrypoint.sh 
+        "
+  unbound:
+    build:
+      context: ./unbound
+      dockerfile: Dockerfile
+    #container_name: unbound
+    restart: unless-stopped
+    ports:
+      - "$UNBOUND_PORT:53/tcp"
+      - "$UNBOUND_PORT:53/udp"
+    volumes:
+      - ./unbound/unbound.conf:/etc/unbound/unbound.conf
+      - unbound_data:/var/lib/unbound
+    command: unbound -d -c /etc/unbound/unbound.conf
+
+  # Временно отключен, чтобы не мешал
+  # tor:
+  #   build:
+  #     context: ./tor
+  #     dockerfile: Dockerfile
+  #   #container_name: home_proxy-tor
+  #   restart: unless-stopped
+  #   ports:
+  #     - $TOR_SOCKS_PORT:9050/tcp
+  #   volumes:
+  #     - ./tor/torrc:/etc/tor/torrc
+  #     - ./tor/bridges.txt:/etc/tor/bridges.txt
+  #     - tor_data:/var/lib/tor
+
+
+volumes:
+  unbound_data:
+    driver: local
+  tor_data:
+    driver: local 
