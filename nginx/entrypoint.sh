@@ -63,7 +63,9 @@ NGINX_CONF="/etc/nginx/nginx.conf"
 
 cat > "$NGINX_CONF" <<EOF
 user nginx;
-worker_processes auto;
+
+# worker_processes auto;
+worker_processes 2;
 error_log /var/log/nginx/error.log notice;
 pid /run/nginx.pid;
 
