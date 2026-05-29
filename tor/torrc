@@ -37,11 +37,12 @@ DataDirectory /var/lib/tor
 
 UseBridges 1
 ClientTransportPlugin obfs4 exec /usr/bin/lyrebird
-#ClientTransportPlugin snowflake exec /usr/bin/snowflake-proxy
-#ClientTransportPlugin webtunnel exec /usr/bin/lyrebird
+#ClientTransportPlugin meek_lite,obfs4,snowflake,webtunnel exec /usr/bin/lyrebird
 
 ExcludeExitNodes {ru},{by},{kz}
 
+# Snowflake не работает внутри Docker (WebRTC/UDP не проходит NAT).
+# Используем obfs4 bridges — мосты нужно свежие, получить на https://bridges.torproject.org
 %include /etc/tor/bridges.txt
 
 # SOCKS порт для клиентов

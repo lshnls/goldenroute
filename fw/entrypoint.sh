@@ -4,6 +4,19 @@ set -eu
 CHAIN_NAME="FW_REDIRECT"
 RULES_APPLIED=0
 
+PROXY_BACKEND="${PROXY_BACKEND:-wstunnel}"
+
+case "$PROXY_BACKEND" in
+    tor)
+        SOCKS5_PORT=9050
+        echo "[fw] Backend: tor (SOCKS5 :$SOCKS5_PORT)"
+        ;;
+    *)
+        SOCKS5_PORT=41080
+        echo "[fw] Backend: wstunnel (SOCKS5 :$SOCKS5_PORT)"
+        ;;
+esac
+
 cleanup() {
     if [ "$RULES_APPLIED" = "1" ]; then
         iptables -t nat -D PREROUTING -j "$CHAIN_NAME" 2>/dev/null || true
@@ -30,8 +43,27 @@ curl -sS --max-time 30 "$RIPE_URL" | \
     sed 's/^/add russian-ips /' | \
     ipset restore -! || echo "[fw] Warning: failed to load Russian IPs from RIPE"
 
+# generate redsocks config with the selected backend
+cat > /tmp/redsocks.conf <<EOF
+base {
+    log_debug = off;
+    log_info = on;
+    log = "stderr";
+    daemon = off;
+    redirector = iptables;
+}
+
+redsocks {
+    local_ip = 0.0.0.0;
+    local_port = 12345;
+    ip = 127.0.0.1;
+    port = ${SOCKS5_PORT};
+    type = socks5;
+}
+EOF
+
 # start redsocks
-redsocks -c /etc/redsocks.conf &
+redsocks -c /tmp/redsocks.conf &
 REDSOCKS_PID=$!
 sleep 1
 
@@ -44,36 +76,24 @@ iptables -t nat -A OUTPUT -d 172.16.0.0/12 -j RETURN
 iptables -t nat -A OUTPUT -d 192.168.0.0/16 -j RETURN
 iptables -t nat -A OUTPUT -m set --match-set russian-ips dst -j RETURN
 iptables -t nat -A OUTPUT -p tcp --dport 12345 -j RETURN
+iptables -t nat -A OUTPUT -p tcp --dport "${SOCKS5_PORT}" -j RETURN
 iptables -t nat -A OUTPUT -p tcp -j REDIRECT --to-ports 12345
 
 # -------------------------------------------------------
 # 2. PREROUTING — forwarded traffic from LAN clients
-#    (uses a custom chain to avoid flushing Docker's rules)
 # -------------------------------------------------------
 iptables -t nat -N "$CHAIN_NAME" 2>/dev/null || true
 iptables -t nat -A PREROUTING -j "$CHAIN_NAME"
 
-# don't redirect traffic already destined for this host
 iptables -t nat -A "$CHAIN_NAME" -m addrtype --dst-type LOCAL -j RETURN
-
-# don't redirect traffic FROM Docker containers (bridge 172.16.0.0/12)
 iptables -t nat -A "$CHAIN_NAME" -s 172.16.0.0/12 -j RETURN
-
-# don't redirect private / LAN ranges
 iptables -t nat -A "$CHAIN_NAME" -d 10.0.0.0/8 -j RETURN
 iptables -t nat -A "$CHAIN_NAME" -d 172.16.0.0/12 -j RETURN
 iptables -t nat -A "$CHAIN_NAME" -d 192.168.0.0/16 -j RETURN
-
-# don't redirect Russian IPs
 iptables -t nat -A "$CHAIN_NAME" -m set --match-set russian-ips dst -j RETURN
-
-# don't redirect traffic to redsocks itself
 iptables -t nat -A "$CHAIN_NAME" -p tcp --dport 12345 -j RETURN
-
-# redirect foreign TCP → redsocks
+iptables -t nat -A "$CHAIN_NAME" -p tcp --dport "${SOCKS5_PORT}" -j RETURN
 iptables -t nat -A "$CHAIN_NAME" -p tcp -j REDIRECT --to-ports 12345
-
-# redirect client DNS (UDP/TCP :53) to local unbound
 iptables -t nat -A "$CHAIN_NAME" -p udp --dport 53 -j REDIRECT --to-ports 53
 iptables -t nat -A "$CHAIN_NAME" -p tcp --dport 53 -j REDIRECT --to-ports 53
 
@@ -91,8 +111,9 @@ iptables -t nat -A POSTROUTING -s 192.168.1.0/24 ! -d 192.168.1.0/24 -j MASQUERA
 RULES_APPLIED=1
 
 echo "[fw] Transparent proxy ready"
-echo "       Host TCP(OUTPUT) → redsocks → wstunnel SOCKS5:41080"
-echo "       LAN TCP(PREROUTING) → redsocks → wstunnel SOCKS5:41080"
+echo "       Backend: $PROXY_BACKEND (SOCKS5 :${SOCKS5_PORT})"
+echo "       Host TCP(OUTPUT) → redsocks → ${PROXY_BACKEND}"
+echo "       LAN TCP(PREROUTING) → redsocks → ${PROXY_BACKEND}"
 echo "       LAN DNS → unbound :53"
 echo "       LAN FORWARD + MASQUERADE enabled for 192.168.1.0/24"
 

@@ -39,9 +39,8 @@ services:
       - NET_ADMIN
       - NET_RAW
     restart: unless-stopped
-    depends_on:
-      wstunnel:
-        condition: service_started
+    environment:
+      - PROXY_BACKEND=${PROXY_BACKEND:-wstunnel}
 
   nginx:
     image: docker.io/nginx:alpine
@@ -71,19 +70,18 @@ services:
     command: unbound -d -c /etc/unbound/unbound.conf
 
   # Временно отключен, чтобы не мешал
-  # tor:
-  #   build:
-  #     context: ./tor
-  #     dockerfile: Dockerfile
-  #   #container_name: home_proxy-tor
-  #   restart: unless-stopped
-  #   ports:
-  #     - $TOR_SOCKS_PORT:9050/tcp
-  #   volumes:
-  #     - ./tor/torrc:/etc/tor/torrc
-  #     - ./tor/bridges.txt:/etc/tor/bridges.txt
-  #     - tor_data:/var/lib/tor
-
+  tor:
+    build:
+      context: ./tor
+      dockerfile: Dockerfile
+    #container_name: home_proxy-tor
+    restart: unless-stopped
+    ports:
+      - $TOR_SOCKS_PORT:9050/tcp
+    volumes:
+      - ./tor/torrc:/etc/tor/torrc
+      - ./tor/bridges.txt:/etc/tor/bridges.txt
+      - tor_data:/var/lib/tor
 
 volumes:
   unbound_data:
