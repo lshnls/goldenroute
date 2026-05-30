@@ -2,6 +2,7 @@
 set -eu
 
 CHAIN_NAME="FW_REDIRECT"
+OUTPUT_CHAIN="FW_OUTPUT"
 RULES_APPLIED=0
 
 PROXY_BACKEND="${PROXY_BACKEND:-wstunnel}"
@@ -22,8 +23,11 @@ cleanup() {
         iptables -t nat -D PREROUTING -j "$CHAIN_NAME" 2>/dev/null || true
         iptables -t nat -F "$CHAIN_NAME" 2>/dev/null || true
         iptables -t nat -X "$CHAIN_NAME" 2>/dev/null || true
-        iptables -t nat -F OUTPUT 2>/dev/null || true
+        iptables -t nat -D OUTPUT -j "$OUTPUT_CHAIN" 2>/dev/null || true
+        iptables -t nat -F "$OUTPUT_CHAIN" 2>/dev/null || true
+        iptables -t nat -X "$OUTPUT_CHAIN" 2>/dev/null || true
         ipset destroy russian-ips 2>/dev/null || true
+        ipset destroy russian-ips-tmp 2>/dev/null || true
     fi
 }
 trap cleanup EXIT SIGTERM SIGINT
@@ -32,16 +36,23 @@ trap cleanup EXIT SIGTERM SIGINT
 iptables -t nat -D PREROUTING -j "$CHAIN_NAME" 2>/dev/null || true
 iptables -t nat -F "$CHAIN_NAME" 2>/dev/null || true
 iptables -t nat -X "$CHAIN_NAME" 2>/dev/null || true
-iptables -t nat -D OUTPUT -p tcp -j REDIRECT --to-ports 12345 2>/dev/null || true
+iptables -t nat -D OUTPUT -j "$OUTPUT_CHAIN" 2>/dev/null || true
+iptables -t nat -F "$OUTPUT_CHAIN" 2>/dev/null || true
+iptables -t nat -X "$OUTPUT_CHAIN" 2>/dev/null || true
 
-# download Russian IP ranges from RIPE and load into ipset
-ipset create russian-ips hash:net 2>/dev/null || ipset flush russian-ips
+# download Russian IP ranges from RIPE and load into ipset (atomic swap)
+ipset create russian-ips-tmp hash:net 2>/dev/null || ipset flush russian-ips-tmp
 
 RIPE_URL="https://stat.ripe.net/data/country-resource-list/data.json?resource=RU"
 curl -sS --max-time 30 "$RIPE_URL" | \
     jq -r '.data.resources.ipv4[]' | \
-    sed 's/^/add russian-ips /' | \
+    sed 's/^/add russian-ips-tmp /' | \
     ipset restore -! || echo "[fw] Warning: failed to load Russian IPs from RIPE"
+
+# atomically swap — main set is never flushed before load
+ipset create russian-ips hash:net 2>/dev/null || true
+ipset swap russian-ips-tmp russian-ips
+ipset destroy russian-ips-tmp
 
 # generate redsocks config with the selected backend
 cat > /tmp/redsocks.conf <<EOF
@@ -66,18 +77,22 @@ EOF
 redsocks -c /tmp/redsocks.conf &
 REDSOCKS_PID=$!
 sleep 1
+kill -0 "$REDSOCKS_PID" 2>/dev/null || { echo "[fw] redsocks failed to start"; exit 1; }
 
 # -------------------------------------------------------
 # 1. OUTPUT chain — traffic from the host itself
 # -------------------------------------------------------
-iptables -t nat -A OUTPUT -d 127.0.0.0/8 -j RETURN
-iptables -t nat -A OUTPUT -d 10.0.0.0/8 -j RETURN
-iptables -t nat -A OUTPUT -d 172.16.0.0/12 -j RETURN
-iptables -t nat -A OUTPUT -d 192.168.0.0/16 -j RETURN
-iptables -t nat -A OUTPUT -m set --match-set russian-ips dst -j RETURN
-iptables -t nat -A OUTPUT -p tcp --dport 12345 -j RETURN
-iptables -t nat -A OUTPUT -p tcp --dport "${SOCKS5_PORT}" -j RETURN
-iptables -t nat -A OUTPUT -p tcp -j REDIRECT --to-ports 12345
+iptables -t nat -N "$OUTPUT_CHAIN" 2>/dev/null || true
+iptables -t nat -I OUTPUT -j "$OUTPUT_CHAIN"
+
+iptables -t nat -A "$OUTPUT_CHAIN" -d 127.0.0.0/8 -j RETURN
+iptables -t nat -A "$OUTPUT_CHAIN" -d 10.0.0.0/8 -j RETURN
+iptables -t nat -A "$OUTPUT_CHAIN" -d 172.16.0.0/12 -j RETURN
+iptables -t nat -A "$OUTPUT_CHAIN" -d 192.168.0.0/16 -j RETURN
+iptables -t nat -A "$OUTPUT_CHAIN" -m set --match-set russian-ips dst -j RETURN
+iptables -t nat -A "$OUTPUT_CHAIN" -p tcp --dport 12345 -j RETURN
+iptables -t nat -A "$OUTPUT_CHAIN" -p tcp --dport "${SOCKS5_PORT}" -j RETURN
+iptables -t nat -A "$OUTPUT_CHAIN" -p tcp -j REDIRECT --to-ports 12345
 
 # -------------------------------------------------------
 # 2. PREROUTING — forwarded traffic from LAN clients
@@ -93,9 +108,9 @@ iptables -t nat -A "$CHAIN_NAME" -d 192.168.0.0/16 -j RETURN
 iptables -t nat -A "$CHAIN_NAME" -m set --match-set russian-ips dst -j RETURN
 iptables -t nat -A "$CHAIN_NAME" -p tcp --dport 12345 -j RETURN
 iptables -t nat -A "$CHAIN_NAME" -p tcp --dport "${SOCKS5_PORT}" -j RETURN
-iptables -t nat -A "$CHAIN_NAME" -p tcp -j REDIRECT --to-ports 12345
 iptables -t nat -A "$CHAIN_NAME" -p udp --dport 53 -j REDIRECT --to-ports 53
 iptables -t nat -A "$CHAIN_NAME" -p tcp --dport 53 -j REDIRECT --to-ports 53
+iptables -t nat -A "$CHAIN_NAME" -p tcp -j REDIRECT --to-ports 12345
 
 # -------------------------------------------------------
 # 3. FORWARD — allow LAN clients to route through gateway

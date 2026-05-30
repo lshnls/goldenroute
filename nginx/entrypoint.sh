@@ -124,6 +124,9 @@ cat >> "$NGINX_CONF" <<EOF
 }
 EOF
 
+# nginx.conf содержит credentials (Authorization) — ограничиваем доступ
+chmod 600 "$NGINX_CONF"
+
 # Очистка временных файлов
 rm -f "$UPSTREAM_FILE" "$SERVER_FILE"
 
