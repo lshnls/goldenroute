@@ -1,7 +1,7 @@
-FROM alpine:latest
+FROM alpine:3.21
 
 # Install required packages
-RUN apk add --no-cache tor obfs4proxy
+RUN apk add --no-cache tor lyrebird -X https://dl-cdn.alpinelinux.org/alpine/edge/community
 
 # Copy configuration files
 COPY ./torrc /etc/tor/torrc
