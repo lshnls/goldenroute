@@ -9,7 +9,7 @@ PROXY_BACKEND="${PROXY_BACKEND:-wstunnel}"
 
 case "$PROXY_BACKEND" in
     tor)
-        SOCKS5_PORT=9050
+        SOCKS5_PORT="${TOR_SOCKS_PORT:-9050}"
         echo "[fw] Backend: tor (SOCKS5 :$SOCKS5_PORT)"
         ;;
     *)
@@ -20,6 +20,9 @@ esac
 
 cleanup() {
     if [ "$RULES_APPLIED" = "1" ]; then
+        iptables -D DOCKER-USER -s 192.168.1.0/24 -j ACCEPT 2>/dev/null || true
+        iptables -D DOCKER-USER -d 192.168.1.0/24 -j ACCEPT 2>/dev/null || true
+        iptables -t nat -D POSTROUTING -s 192.168.1.0/24 ! -d 192.168.1.0/24 -j MASQUERADE 2>/dev/null || true
         iptables -t nat -D PREROUTING -j "$CHAIN_NAME" 2>/dev/null || true
         iptables -t nat -F "$CHAIN_NAME" 2>/dev/null || true
         iptables -t nat -X "$CHAIN_NAME" 2>/dev/null || true
@@ -39,6 +42,9 @@ iptables -t nat -X "$CHAIN_NAME" 2>/dev/null || true
 iptables -t nat -D OUTPUT -j "$OUTPUT_CHAIN" 2>/dev/null || true
 iptables -t nat -F "$OUTPUT_CHAIN" 2>/dev/null || true
 iptables -t nat -X "$OUTPUT_CHAIN" 2>/dev/null || true
+iptables -D DOCKER-USER -s 192.168.1.0/24 -j ACCEPT 2>/dev/null || true
+iptables -D DOCKER-USER -d 192.168.1.0/24 -j ACCEPT 2>/dev/null || true
+iptables -t nat -D POSTROUTING -s 192.168.1.0/24 ! -d 192.168.1.0/24 -j MASQUERADE 2>/dev/null || true
 
 # download Russian IP ranges from RIPE and load into ipset (atomic swap)
 ipset create russian-ips-tmp hash:net 2>/dev/null || ipset flush russian-ips-tmp

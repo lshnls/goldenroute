@@ -8,8 +8,10 @@ SERVER_FILE=$(mktemp)
 BACKENDS_FILE="${BACKENDS_FILE:-/etc/nginx/backends.list}"
 PORT=8081
 
+BACKENDS_TMP=$(mktemp)
 if [ -f "$BACKENDS_FILE" ]; then
-    grep -vE '^\s*(#|$)' "$BACKENDS_FILE" | while IFS=';' read -r ip_port auth_base64 server_name; do
+    grep -vE '^\s*(#|$)' "$BACKENDS_FILE" > "$BACKENDS_TMP"
+    while IFS=';' read -r ip_port auth_base64 server_name; do
         [ -z "$ip_port" ] && continue
 
         # Разбираем ip и порт
@@ -53,7 +55,8 @@ if [ -f "$BACKENDS_FILE" ]; then
     }
 INNER
         PORT=$((PORT+1))
-    done
+    done < "$BACKENDS_TMP"
+    rm -f "$BACKENDS_TMP"
 else
     echo "WARNING: No backends file found at $BACKENDS_FILE. Starting nginx with 503 default."
 fi

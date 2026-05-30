@@ -41,7 +41,7 @@ services:
     restart: unless-stopped
     environment:
       - PROXY_BACKEND=${PROXY_BACKEND:-wstunnel}
-
+      - TOR_SOCKS_PORT=${TOR_SOCKS_PORT:-9050}
   nginx:
     image: docker.io/nginx:alpine
     # container_name: nginx-pac
