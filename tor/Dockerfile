@@ -11,8 +11,9 @@ COPY ./docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 # Make the entrypoint script executable
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
-# Expose the SOCKS port
+# Expose the SOCKS and control ports
 EXPOSE 9050
+EXPOSE 9051
 
 # Set the working directory
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

@@ -55,9 +55,9 @@ SocksPolicy accept 10.0.0.0/8
 SocksPolicy reject *
 
 
-# Control port для управления
-#ControlPort 9051
-#CookieAuthentication 1
+# Control port для управления (мониторинг Prometheus)
+ControlPort 0.0.0.0:9051
+HashedControlPassword 16:12D925836BE694C2606BAD60CB141FD3D1B12988B5E53C10C32FE2AE82
 
 # Логирование
 #Log notice file /var/log/tor/tor.log

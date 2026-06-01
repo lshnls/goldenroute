@@ -78,6 +78,7 @@ services:
     restart: unless-stopped
     ports:
       - $TOR_SOCKS_PORT:9050/tcp
+      - ${TOR_CONTROL_PORT:-9051}:9051/tcp
     volumes:
       - ./tor/torrc:/etc/tor/torrc
       - ./tor/bridges.txt:/etc/tor/bridges.txt

@@ -13,7 +13,7 @@ case "$PROXY_BACKEND" in
         echo "[fw] Backend: tor (SOCKS5 :$SOCKS5_PORT)"
         ;;
     *)
-        SOCKS5_PORT=41080
+        SOCKS5_PORT="${LLP_SOCKS5_PROXY:-41080}"
         echo "[fw] Backend: wstunnel (SOCKS5 :$SOCKS5_PORT)"
         ;;
 esac
@@ -97,7 +97,9 @@ iptables -t nat -A "$OUTPUT_CHAIN" -d 172.16.0.0/12 -j RETURN
 iptables -t nat -A "$OUTPUT_CHAIN" -d 192.168.0.0/16 -j RETURN
 iptables -t nat -A "$OUTPUT_CHAIN" -m set --match-set russian-ips dst -j RETURN
 iptables -t nat -A "$OUTPUT_CHAIN" -p tcp --dport 12345 -j RETURN
+# для подстраховки
 iptables -t nat -A "$OUTPUT_CHAIN" -p tcp --dport "${SOCKS5_PORT}" -j RETURN
+# переправляем на redsock
 iptables -t nat -A "$OUTPUT_CHAIN" -p tcp -j REDIRECT --to-ports 12345
 
 # -------------------------------------------------------
