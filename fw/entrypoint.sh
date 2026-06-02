@@ -12,6 +12,10 @@ case "$PROXY_BACKEND" in
         SOCKS5_PORT="${TOR_SOCKS_PORT:-9050}"
         echo "[fw] Backend: tor (SOCKS5 :$SOCKS5_PORT)"
         ;;
+    off)
+        SOCKS5_PORT=""
+        echo "[fw] Proxy disabled — all traffic direct"
+        ;;
     *)
         SOCKS5_PORT="${LLP_SOCKS5_PROXY:-41080}"
         echo "[fw] Backend: wstunnel (SOCKS5 :$SOCKS5_PORT)"
@@ -46,6 +50,7 @@ iptables -D DOCKER-USER -s 192.168.1.0/24 -j ACCEPT 2>/dev/null || true
 iptables -D DOCKER-USER -d 192.168.1.0/24 -j ACCEPT 2>/dev/null || true
 iptables -t nat -D POSTROUTING -s 192.168.1.0/24 ! -d 192.168.1.0/24 -j MASQUERADE 2>/dev/null || true
 
+if [ -n "$SOCKS5_PORT" ]; then
 # download Russian IP ranges from RIPE and load into ipset (atomic swap)
 ipset create russian-ips-tmp hash:net 2>/dev/null || ipset flush russian-ips-tmp
 
@@ -97,10 +102,9 @@ iptables -t nat -A "$OUTPUT_CHAIN" -d 172.16.0.0/12 -j RETURN
 iptables -t nat -A "$OUTPUT_CHAIN" -d 192.168.0.0/16 -j RETURN
 iptables -t nat -A "$OUTPUT_CHAIN" -m set --match-set russian-ips dst -j RETURN
 iptables -t nat -A "$OUTPUT_CHAIN" -p tcp --dport 12345 -j RETURN
-# для подстраховки
 iptables -t nat -A "$OUTPUT_CHAIN" -p tcp --dport "${SOCKS5_PORT}" -j RETURN
-# переправляем на redsock
 iptables -t nat -A "$OUTPUT_CHAIN" -p tcp -j REDIRECT --to-ports 12345
+fi
 
 # -------------------------------------------------------
 # 2. PREROUTING — forwarded traffic from LAN clients
@@ -113,12 +117,16 @@ iptables -t nat -A "$CHAIN_NAME" -s 172.16.0.0/12 -j RETURN
 iptables -t nat -A "$CHAIN_NAME" -d 10.0.0.0/8 -j RETURN
 iptables -t nat -A "$CHAIN_NAME" -d 172.16.0.0/12 -j RETURN
 iptables -t nat -A "$CHAIN_NAME" -d 192.168.0.0/16 -j RETURN
+if [ -n "$SOCKS5_PORT" ]; then
 iptables -t nat -A "$CHAIN_NAME" -m set --match-set russian-ips dst -j RETURN
 iptables -t nat -A "$CHAIN_NAME" -p tcp --dport 12345 -j RETURN
 iptables -t nat -A "$CHAIN_NAME" -p tcp --dport "${SOCKS5_PORT}" -j RETURN
+fi
 iptables -t nat -A "$CHAIN_NAME" -p udp --dport 53 -j REDIRECT --to-ports 53
 iptables -t nat -A "$CHAIN_NAME" -p tcp --dport 53 -j REDIRECT --to-ports 53
+if [ -n "$SOCKS5_PORT" ]; then
 iptables -t nat -A "$CHAIN_NAME" -p tcp -j REDIRECT --to-ports 12345
+fi
 
 # -------------------------------------------------------
 # 3. FORWARD — allow LAN clients to route through gateway
@@ -133,11 +141,18 @@ iptables -t nat -A POSTROUTING -s 192.168.1.0/24 ! -d 192.168.1.0/24 -j MASQUERA
 
 RULES_APPLIED=1
 
-echo "[fw] Transparent proxy ready"
-echo "       Backend: $PROXY_BACKEND (SOCKS5 :${SOCKS5_PORT})"
+echo "[fw] Firewall ready"
+echo "       Mode: $PROXY_BACKEND"
+if [ -n "$SOCKS5_PORT" ]; then
 echo "       Host TCP(OUTPUT) → redsocks → ${PROXY_BACKEND}"
 echo "       LAN TCP(PREROUTING) → redsocks → ${PROXY_BACKEND}"
+fi
 echo "       LAN DNS → unbound :53"
 echo "       LAN FORWARD + MASQUERADE enabled for 192.168.1.0/24"
 
+if [ -n "$SOCKS5_PORT" ]; then
 wait $REDSOCKS_PID
+else
+# держим контейнер живым — нет демона для wait
+tail -f /dev/null
+fi
