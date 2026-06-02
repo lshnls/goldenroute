@@ -4,6 +4,9 @@ set -eu
 CHAIN_NAME="FW_REDIRECT"
 OUTPUT_CHAIN="FW_OUTPUT"
 RULES_APPLIED=0
+REDSOCKS_PID=""
+REDSOCKS_TOR_PID=""
+HEALTH_PID=""
 
 PROXY_BACKEND="${PROXY_BACKEND:-wstunnel}"
 
@@ -41,6 +44,9 @@ cleanup() {
         iptables -t nat -X FW_LB 2>/dev/null || true
         ipset destroy russian-ips 2>/dev/null || true
         ipset destroy russian-ips-tmp 2>/dev/null || true
+        kill "$REDSOCKS_PID" 2>/dev/null || true
+        kill "$REDSOCKS_TOR_PID" 2>/dev/null || true
+        kill "$HEALTH_PID" 2>/dev/null || true
     fi
 }
 trap cleanup EXIT SIGTERM SIGINT
@@ -164,9 +170,9 @@ iptables -t nat -A "$CHAIN_NAME" -p tcp --dport 9050 -j RETURN
 iptables -t nat -A "$CHAIN_NAME" -p tcp --dport 12346 -j RETURN
 fi
 fi
+if [ "$PROXY_BACKEND" != "off" ]; then
 iptables -t nat -A "$CHAIN_NAME" -p udp --dport 53 -j REDIRECT --to-ports 53
 iptables -t nat -A "$CHAIN_NAME" -p tcp --dport 53 -j REDIRECT --to-ports 53
-if [ "$PROXY_BACKEND" != "off" ]; then
 if [ "$PROXY_BACKEND" = "load_balancing" ]; then
 iptables -t nat -A "$CHAIN_NAME" -p tcp -j FW_LB
 else
