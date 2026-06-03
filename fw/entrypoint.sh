@@ -48,6 +48,7 @@ cleanup() {
         kill "$REDSOCKS_TOR_PID" 2>/dev/null || true
         kill "$HEALTH_PID" 2>/dev/null || true
     fi
+    echo "[fw] cleanup done"
 }
 trap cleanup EXIT SIGTERM SIGINT
 
@@ -64,20 +65,42 @@ iptables -D DOCKER-USER -s 192.168.1.0/24 -j ACCEPT 2>/dev/null || true
 iptables -D DOCKER-USER -d 192.168.1.0/24 -j ACCEPT 2>/dev/null || true
 iptables -t nat -D POSTROUTING -s 192.168.1.0/24 ! -d 192.168.1.0/24 -j MASQUERADE 2>/dev/null || true
 
+RUSSIAN_IPS_FILE="/etc/goldenroute/russian-ips.txt"
+
 if [ "$PROXY_BACKEND" != "off" ]; then
-# download Russian IP ranges from RIPE and load into ipset (atomic swap)
-ipset create russian-ips-tmp hash:net 2>/dev/null || ipset flush russian-ips-tmp
+# load Russian IP ranges from cached file, then update in background
+if [ -s "$RUSSIAN_IPS_FILE" ]; then
+    echo "[fw] Loading Russian IP ranges from $RUSSIAN_IPS_FILE..."
+    ipset create russian-ips hash:net 2>/dev/null || ipset flush russian-ips
+    sed 's/^/add russian-ips /' "$RUSSIAN_IPS_FILE" | ipset restore -!
+    LOADED=$(ipset list russian-ips | sed -n 's/^Number of entries: //p')
+    echo "[fw] russian-ips loaded from file: $LOADED entries"
+else
+    echo "[fw] $RUSSIAN_IPS_FILE not found — skipping Russian IP matching, all traffic through proxy"
+    ipset create russian-ips hash:net 2>/dev/null || true
+fi
 
+# background RIPE updater
 RIPE_URL="https://stat.ripe.net/data/country-resource-list/data.json?resource=RU"
-curl -sS --max-time 30 "$RIPE_URL" | \
-    jq -r '.data.resources.ipv4[]' | \
-    sed 's/^/add russian-ips-tmp /' | \
-    ipset restore -! || echo "[fw] Warning: failed to load Russian IPs from RIPE"
-
-# atomically swap — main set is never flushed before load
-ipset create russian-ips hash:net 2>/dev/null || true
-ipset swap russian-ips-tmp russian-ips
-ipset destroy russian-ips-tmp
+(
+    for i in 1 2 3 4; do
+        TMP=$(mktemp)
+        if curl -sS --max-time 30 "$RIPE_URL" 2>/dev/null | \
+            jq -r '.data.resources.ipv4[]' > "$TMP" 2>/dev/null && [ -s "$TMP" ]; then
+            cp "$TMP" "$RUSSIAN_IPS_FILE"
+            echo "[fw] RIPE download successful, $(wc -l < "$TMP") ranges saved to $RUSSIAN_IPS_FILE"
+            ipset create russian-ips-tmp hash:net 2>/dev/null || ipset flush russian-ips-tmp
+            sed 's/^/add russian-ips-tmp /' "$RUSSIAN_IPS_FILE" | ipset restore -!
+            ipset swap russian-ips-tmp russian-ips
+            ipset destroy russian-ips-tmp
+            rm -f "$TMP"
+            break
+        fi
+        echo "[fw] RIPE download failed (attempt $i/4), retrying in 5s..."
+        rm -f "$TMP"
+        sleep 5
+    done
+) &
 
 # generate redsocks config with the selected backend
 cat > /tmp/redsocks.conf <<EOF

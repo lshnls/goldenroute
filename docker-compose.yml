@@ -39,6 +39,10 @@ services:
       - NET_ADMIN
       - NET_RAW
     restart: unless-stopped
+    depends_on:
+      - unbound
+    volumes:
+      - ./fw/russian-ips.txt:/etc/goldenroute/russian-ips.txt
     environment:
       - PROXY_BACKEND=${PROXY_BACKEND:-wstunnel}
       - TOR_SOCKS_PORT=${TOR_SOCKS_PORT:-9050}

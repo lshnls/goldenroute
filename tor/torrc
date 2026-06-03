@@ -47,7 +47,7 @@ ExcludeExitNodes {ru},{by},{kz}
 
 # SOCKS порт для клиентов
 SocksPort 0.0.0.0:9050
-#SocksTimeout 30
+SocksTimeout 30
 SocksPolicy accept 192.168.0.0/16
 SocksPolicy accept 172.16.0.0/12
 SocksPolicy accept 127.0.0.0/8
@@ -66,8 +66,8 @@ HashedControlPassword 16:12D925836BE694C2606BAD60CB141FD3D1B12988B5E53C10C32FE2A
 #SafeLogging 1
 
 # быстрее выбирать узлы
-#CircuitBuildTimeout 15
-#LearnCircuitBuildTimeout 1
+CircuitBuildTimeout 10
+LearnCircuitBuildTimeout 1
 
 # использовать цепочку дольше (меньше перестроений)
 MaxCircuitDirtiness 600
@@ -79,16 +79,17 @@ ConnLimit 128
 KeepalivePeriod 180
 
 # больше потоков в одной цепочке
-MaxClientCircuitsPending 128
+MaxClientCircuitsPending 256
 
 # ускоряет загрузку директорий
-#UseEntryGuards 1
-#NumEntryGuards 8
+UseEntryGuards 1
+NumEntryGuards 3
 
 # чаще строить новые цепочки
-#NewCircuitPeriod 15
+NewCircuitPeriod 30
 
+# Строить цепочки заранее
+CircuitStreamTimeout 60
 
 #Log debug stdout
-
 Nickname Tor4aaxuojie
