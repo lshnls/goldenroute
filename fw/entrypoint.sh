@@ -1,6 +1,7 @@
 #!/bin/sh
 set -eu
 
+set -o pipefail
 CHAIN_NAME="FW_REDIRECT"
 OUTPUT_CHAIN="FW_OUTPUT"
 RULES_APPLIED=0
@@ -205,6 +206,12 @@ fi
 fi
 
 # -------------------------------------------------------
+
+# Redirect DNS to unbound
+if [ "$PROXY_ENABLED" != "no" ]; then
+    iptables -t nat -A "$OUTPUT_CHAIN" -p udp --dport 53 -j REDIRECT --to-ports 53
+    iptables -t nat -A "$OUTPUT_CHAIN" -p tcp --dport 53 -j REDIRECT --to-ports 53
+fi
 # 2. PREROUTING — forwarded traffic from LAN clients
 # -------------------------------------------------------
 iptables -t nat -N "$CHAIN_NAME" 2>/dev/null || true

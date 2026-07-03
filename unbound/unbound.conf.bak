@@ -1,6 +1,5 @@
 # Основной сервер
 server:
-    auto-trust-anchor-file: "/var/lib/unbound/root.key"
     # Логи (по желанию)
     # Минимальные логи. Можно увеличить до 2–3 для отладки.
     verbosity: 2

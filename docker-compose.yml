@@ -54,6 +54,7 @@ services:
     volumes:
       - ./nginx/entrypoint.sh:/entrypoint.sh:ro
       - ./nginx/backends.list:/etc/nginx/backends.list:ro
+      - ./nginx/backends.list.example:/etc/nginx/backends.list.example:ro
     entrypoint: |
       sh -c "
         cp /entrypoint.sh /tmp/ &&
