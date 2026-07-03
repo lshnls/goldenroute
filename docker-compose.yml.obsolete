@@ -45,9 +45,7 @@ services:
       - ./fw/russian-ips.txt:/etc/goldenroute/russian-ips.txt
       - ./fw/tor-only-ips.txt:/etc/goldenroute/tor-only-ips.txt:ro
     environment:
-#      - PROXY_BACKEND=${PROXY_BACKEND:-wstunnel} # obsolete
-      - TOR_BALANCE=${TOR_BALANCE:-70}
-      - WSTUNNEL_BALANCE=${WSTUNNEL_BALANCE:-30}
+      - PROXY_BACKEND=${PROXY_BACKEND:-wstunnel}
       - TOR_SOCKS_PORT=${TOR_SOCKS_PORT:-9050}
   nginx:
     image: docker.io/nginx:alpine
@@ -56,6 +54,7 @@ services:
     volumes:
       - ./nginx/entrypoint.sh:/entrypoint.sh:ro
       - ./nginx/backends.list:/etc/nginx/backends.list:ro
+      - ./nginx/backends.list.example:/etc/nginx/backends.list.example:ro
     entrypoint: |
       sh -c "
         cp /entrypoint.sh /tmp/ &&

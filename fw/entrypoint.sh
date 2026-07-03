@@ -83,7 +83,7 @@ iptables -t nat -D POSTROUTING -s 192.168.1.0/24 ! -d 192.168.1.0/24 -j MASQUERA
 RUSSIAN_IPS_FILE="/etc/goldenroute/russian-ips.txt"
 TOR_ONLY_IPS_FILE="/etc/goldenroute/tor-only-ips.txt"
 
-if [ "$PROXY_ENABLED" != "off" ]; then
+if [ "$PROXY_ENABLED" != "no" ]; then
 
 # --- Load tor-only IPs ---
 ipset create tor-only hash:net 2>/dev/null || ipset flush tor-only
@@ -226,7 +226,7 @@ iptables -t nat -A "$CHAIN_NAME" -d 192.168.0.0/16 -j RETURN
 # tor-only: forced through Tor before everything else
 iptables -t nat -A "$CHAIN_NAME" -m set --match-set tor-only dst -p tcp -j REDIRECT --to-ports 12346
 
-if [ "$PROXY_ENABLED" != "off" ]; then
+if [ "$PROXY_ENABLED" != "no" ]; then
 iptables -t nat -A "$CHAIN_NAME" -m set --match-set russian-ips dst -j RETURN
 iptables -t nat -A "$CHAIN_NAME" -p tcp --dport 12345 -j RETURN
 iptables -t nat -A "$CHAIN_NAME" -p tcp --dport "${SOCKS5_PORT}" -j RETURN
@@ -235,7 +235,7 @@ iptables -t nat -A "$CHAIN_NAME" -p tcp --dport 9050 -j RETURN
 iptables -t nat -A "$CHAIN_NAME" -p tcp --dport 12346 -j RETURN
 fi
 fi
-if [ "$PROXY_ENABLED" != "off" ]; then
+if [ "$PROXY_ENABLED" != "no" ]; then
 iptables -t nat -A "$CHAIN_NAME" -p udp --dport 53 -j REDIRECT --to-ports 53
 iptables -t nat -A "$CHAIN_NAME" -p tcp --dport 53 -j REDIRECT --to-ports 53
 if [ "$PROXY_ENABLED" = "load_balancing" ]; then
@@ -285,7 +285,7 @@ RULES_APPLIED=1
 
 echo "[fw] Firewall ready"
 echo "       Mode: $PROXY_ENABLED"
-if [ "$PROXY_ENABLED" != "off" ]; then
+if [ "$PROXY_ENABLED" != "no" ]; then
 if [ "$PROXY_ENABLED" = "load_balancing" ]; then
 echo "       Load balancing: wstunnel(:12345) + tor(:12346)"
 else
@@ -299,7 +299,7 @@ echo "       LAN FORWARD + MASQUERADE enabled for 192.168.1.0/24"
 
 if [ "$PROXY_ENABLED" = "load_balancing" ]; then
 wait $REDSOCKS_PID $REDSOCKS_TOR_PID $HEALTH_PID
-elif [ "$PROXY_ENABLED" != "off" ]; then
+elif [ "$PROXY_ENABLED" != "no" ]; then
 wait $REDSOCKS_PID
 else
 # держим контейнер живым — нет демона для wait

@@ -4,16 +4,6 @@ set -e
 # ===== 1. Auto-create backends.list from example if missing =====
 # Hard-coded path because docker-compose entrypoint doesn't pass env vars
 BACKENDS_FILE="/etc/nginx/backends.list"
-BACKENDS_EXAMPLE="/etc/nginx/backends.list.example"
-if [ ! -f "$BACKENDS_FILE" ]; then
-    if [ -f "$BACKENDS_EXAMPLE" ]; then
-        cp "$BACKENDS_EXAMPLE" "$BACKENDS_FILE"
-        echo "Created $BACKENDS_FILE from $BACKENDS_EXAMPLE"
-    else
-        echo "ERROR: $BACKENDS_FILE not found" >&2
-        exit 1
-    fi
-fi
 
 # ===== 2. Подготовка временных файлов для конфигурации бэкендов =====
 UPSTREAM_FILE=$(mktemp)
