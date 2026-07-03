@@ -9,8 +9,8 @@ REDSOCKS_TOR_PID=""
 HEALTH_PID=""
 
 # Balancing configuration (default 70/30)
-TOR_BALANCE="${TOR_BALANCE:-50}"
-WSTUNNEL_BALANCE="${WSTUNNEL_BALANCE:-50}"
+TOR_BALANCE="${TOR_BALANCE:-70}"
+WSTUNNEL_BALANCE="${WSTUNNEL_BALANCE:-30}"
 
 # Validate balances
 if ! { [ "$TOR_BALANCE" -eq 0 ] && [ "$WSTUNNEL_BALANCE" -eq 0 ]; } && \
