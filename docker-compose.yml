@@ -43,6 +43,7 @@ services:
       - unbound
     volumes:
       - ./fw/russian-ips.txt:/etc/goldenroute/russian-ips.txt
+      - ./fw/tor-only-ips.txt:/etc/goldenroute/tor-only-ips.txt:ro
     environment:
       - PROXY_BACKEND=${PROXY_BACKEND:-wstunnel}
       - TOR_SOCKS_PORT=${TOR_SOCKS_PORT:-9050}

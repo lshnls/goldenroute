@@ -44,6 +44,7 @@ cleanup() {
         iptables -t nat -X FW_LB 2>/dev/null || true
         ipset destroy russian-ips 2>/dev/null || true
         ipset destroy russian-ips-tmp 2>/dev/null || true
+        ipset destroy tor-only 2>/dev/null || true
         kill "$REDSOCKS_PID" 2>/dev/null || true
         kill "$REDSOCKS_TOR_PID" 2>/dev/null || true
         kill "$HEALTH_PID" 2>/dev/null || true
@@ -66,8 +67,20 @@ iptables -D DOCKER-USER -d 192.168.1.0/24 -j ACCEPT 2>/dev/null || true
 iptables -t nat -D POSTROUTING -s 192.168.1.0/24 ! -d 192.168.1.0/24 -j MASQUERADE 2>/dev/null || true
 
 RUSSIAN_IPS_FILE="/etc/goldenroute/russian-ips.txt"
+TOR_ONLY_IPS_FILE="/etc/goldenroute/tor-only-ips.txt"
 
 if [ "$PROXY_BACKEND" != "off" ]; then
+
+# --- Load tor-only IPs ---
+ipset create tor-only hash:net 2>/dev/null || ipset flush tor-only
+if [ -s "$TOR_ONLY_IPS_FILE" ]; then
+    sed '/^#/d; /^$/d; s/^/add tor-only /' "$TOR_ONLY_IPS_FILE" | ipset restore -! 2>/dev/null || true
+    TOR_LOADED=$(ipset list tor-only | sed -n 's/^Number of entries: //p')
+    echo "[fw] tor-only loaded from file: $TOR_LOADED entries"
+else
+    echo "[fw] $TOR_ONLY_IPS_FILE not found or empty — no tor-only IPs"
+fi
+
 # load Russian IP ranges from cached file, then update in background
 if [ -s "$RUSSIAN_IPS_FILE" ]; then
     echo "[fw] Loading Russian IP ranges from $RUSSIAN_IPS_FILE..."
@@ -161,6 +174,10 @@ iptables -t nat -A "$OUTPUT_CHAIN" -d 127.0.0.0/8 -j RETURN
 iptables -t nat -A "$OUTPUT_CHAIN" -d 10.0.0.0/8 -j RETURN
 iptables -t nat -A "$OUTPUT_CHAIN" -d 172.16.0.0/12 -j RETURN
 iptables -t nat -A "$OUTPUT_CHAIN" -d 192.168.0.0/16 -j RETURN
+
+# tor-only: forced through Tor before everything else
+iptables -t nat -A "$OUTPUT_CHAIN" -m set --match-set tor-only dst -p tcp -j REDIRECT --to-ports 12346
+
 iptables -t nat -A "$OUTPUT_CHAIN" -m set --match-set russian-ips dst -j RETURN
 iptables -t nat -A "$OUTPUT_CHAIN" -p tcp --dport 12345 -j RETURN
 iptables -t nat -A "$OUTPUT_CHAIN" -p tcp --dport "${SOCKS5_PORT}" -j RETURN
@@ -184,6 +201,10 @@ iptables -t nat -A "$CHAIN_NAME" -s 172.16.0.0/12 -j RETURN
 iptables -t nat -A "$CHAIN_NAME" -d 10.0.0.0/8 -j RETURN
 iptables -t nat -A "$CHAIN_NAME" -d 172.16.0.0/12 -j RETURN
 iptables -t nat -A "$CHAIN_NAME" -d 192.168.0.0/16 -j RETURN
+
+# tor-only: forced through Tor before everything else
+iptables -t nat -A "$CHAIN_NAME" -m set --match-set tor-only dst -p tcp -j REDIRECT --to-ports 12346
+
 if [ "$PROXY_BACKEND" != "off" ]; then
 iptables -t nat -A "$CHAIN_NAME" -m set --match-set russian-ips dst -j RETURN
 iptables -t nat -A "$CHAIN_NAME" -p tcp --dport 12345 -j RETURN
@@ -250,6 +271,7 @@ echo "       Host TCP(OUTPUT) → redsocks → ${PROXY_BACKEND}"
 echo "       LAN TCP(PREROUTING) → redsocks → ${PROXY_BACKEND}"
 fi
 fi
+echo "       tor-only IPs → tor(:12346)"
 echo "       LAN DNS → unbound :53"
 echo "       LAN FORWARD + MASQUERADE enabled for 192.168.1.0/24"
 

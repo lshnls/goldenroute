@@ -1,0 +1,11 @@
+# IP addresses/CIDRs that always go through Tor
+# One entry per line, e.g.:
+# 104.18.0.0/16
+# 1.2.3.4
+# claude.ai (resolved to IP at startup)
+# Examples:
+# 104.18.0.0/16
+# 104.19.0.0/16
+# 104.20.0.0/16
+
+160.79.104.0/23
