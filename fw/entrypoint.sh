@@ -174,11 +174,17 @@ iptables -t nat -A "$OUTPUT_CHAIN" -p tcp --dport 9050 -j RETURN
 iptables -t nat -A "$OUTPUT_CHAIN" -p tcp -j FW_LB
 fi
 
-# start redsocks-tor for tor-only IPs (in any mode, not just load_balancing)
+# start redsocks-tor whenever Tor can receive redirected traffic:
+# - load balancing sends TOR_BALANCE% of TCP traffic to :12346
+# - tor-only entries force selected destinations to :12346 in any mode
+TOR_ONLY_COUNT=0
 if ipset list tor-only >/dev/null 2>&1; then
     TOR_ONLY_COUNT=$(ipset list tor-only 2>/dev/null | sed -n 's/^Number of entries: //p')
-    if [ -n "$TOR_ONLY_COUNT" ] && [ "$TOR_ONLY_COUNT" -gt 0 ]; then
-        cat > /tmp/redsocks-tor.conf <<EOF
+    TOR_ONLY_COUNT=${TOR_ONLY_COUNT:-0}
+fi
+
+if [ "$TOR_BALANCE" -ne 0 ] || [ "$TOR_ONLY_COUNT" -gt 0 ]; then
+    cat > /tmp/redsocks-tor.conf <<EOF
 base {
     log_debug = off; log_info = on; log = "stderr"; daemon = off;
     redirector = iptables;
@@ -188,11 +194,10 @@ redsocks {
     ip = 127.0.0.1; port = 9050; type = socks5;
 }
 EOF
-        redsocks -c /tmp/redsocks-tor.conf &
-        REDSOCKS_TOR_PID=$!
-        sleep 1
-        kill -0 "$REDSOCKS_TOR_PID" 2>/dev/null || { echo "[fw] redsocks-tor failed to start"; exit 1; }
-    fi
+    redsocks -c /tmp/redsocks-tor.conf &
+    REDSOCKS_TOR_PID=$!
+    sleep 1
+    kill -0 "$REDSOCKS_TOR_PID" 2>/dev/null || { echo "[fw] redsocks-tor failed to start"; exit 1; }
 fi
 
 # -------------------------------------------------------
