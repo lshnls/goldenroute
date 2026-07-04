@@ -83,8 +83,6 @@ iptables -t nat -D POSTROUTING -s 192.168.1.0/24 ! -d 192.168.1.0/24 -j MASQUERA
 RUSSIAN_IPS_FILE="/etc/goldenroute/russian-ips.txt"
 TOR_ONLY_IPS_FILE="/etc/goldenroute/tor-only-ips.txt"
 
-if [ "$PROXY_ENABLED" != "no" ]; then
-
 # --- Load tor-only IPs ---
 ipset create tor-only hash:net 2>/dev/null || ipset flush tor-only
 if [ -s "$TOR_ONLY_IPS_FILE" ]; then
@@ -94,6 +92,8 @@ if [ -s "$TOR_ONLY_IPS_FILE" ]; then
 else
     echo "[fw] $TOR_ONLY_IPS_FILE not found or empty — no tor-only IPs"
 fi
+
+if [ "$PROXY_ENABLED" != "no" ]; then
 
 # load Russian IP ranges from cached file, then update in background
 if [ -s "$RUSSIAN_IPS_FILE" ]; then
@@ -154,24 +154,6 @@ REDSOCKS_PID=$!
 sleep 1
 kill -0 "$REDSOCKS_PID" 2>/dev/null || { echo "[fw] redsocks failed to start"; exit 1; }
 
-# second redsocks for tor when load balancing
-if [ "$PROXY_ENABLED" = "load_balancing" ]; then
-    cat > /tmp/redsocks-tor.conf <<EOF
-base {
-    log_debug = off; log_info = on; log = "stderr"; daemon = off;
-    redirector = iptables;
-}
-redsocks {
-    local_ip = 0.0.0.0; local_port = 12346;
-    ip = 127.0.0.1; port = 9050; type = socks5;
-}
-EOF
-    redsocks -c /tmp/redsocks-tor.conf &
-    REDSOCKS_TOR_PID=$!
-    sleep 1
-    kill -0 "$REDSOCKS_TOR_PID" 2>/dev/null || { echo "[fw] redsocks-tor failed to start"; exit 1; }
-fi
-
 if [ "$PROXY_ENABLED" = "load_balancing" ]; then
 iptables -t nat -N FW_LB 2>/dev/null || iptables -t nat -F FW_LB
 WSTUNNEL_PROB=$(awk "BEGIN {printf \"%.6f\", $WSTUNNEL_BALANCE / 100}")
@@ -203,6 +185,27 @@ iptables -t nat -A "$OUTPUT_CHAIN" -p tcp -j FW_LB
 else
 iptables -t nat -A "$OUTPUT_CHAIN" -p tcp -j REDIRECT --to-ports 12345
 fi
+fi
+
+# start redsocks-tor for tor-only IPs (in any mode, not just load_balancing)
+if ipset list tor-only >/dev/null 2>&1; then
+    TOR_ONLY_COUNT=$(ipset list tor-only 2>/dev/null | sed -n 's/^Number of entries: //p')
+    if [ -n "$TOR_ONLY_COUNT" ] && [ "$TOR_ONLY_COUNT" -gt 0 ]; then
+        cat > /tmp/redsocks-tor.conf <<EOF
+base {
+    log_debug = off; log_info = on; log = "stderr"; daemon = off;
+    redirector = iptables;
+}
+redsocks {
+    local_ip = 0.0.0.0; local_port = 12346;
+    ip = 127.0.0.1; port = 9050; type = socks5;
+}
+EOF
+        redsocks -c /tmp/redsocks-tor.conf &
+        REDSOCKS_TOR_PID=$!
+        sleep 1
+        kill -0 "$REDSOCKS_TOR_PID" 2>/dev/null || { echo "[fw] redsocks-tor failed to start"; exit 1; }
+    fi
 fi
 
 # -------------------------------------------------------
@@ -297,11 +300,12 @@ echo "       tor-only IPs → tor(:12346)"
 echo "       LAN DNS → unbound :53"
 echo "       LAN FORWARD + MASQUERADE enabled for 192.168.1.0/24"
 
-if [ "$PROXY_ENABLED" = "load_balancing" ]; then
-wait $REDSOCKS_PID $REDSOCKS_TOR_PID $HEALTH_PID
-elif [ "$PROXY_ENABLED" != "no" ]; then
-wait $REDSOCKS_PID
+WAIT_PIDS=""
+if [ -n "$REDSOCKS_PID" ]; then WAIT_PIDS="$REDSOCKS_PID"; fi
+if [ -n "$REDSOCKS_TOR_PID" ]; then WAIT_PIDS="$WAIT_PIDS $REDSOCKS_TOR_PID"; fi
+if [ -n "$HEALTH_PID" ]; then WAIT_PIDS="$WAIT_PIDS $HEALTH_PID"; fi
+if [ -n "$WAIT_PIDS" ]; then
+    wait $WAIT_PIDS
 else
-# держим контейнер живым — нет демона для wait
-tail -f /dev/null
+    tail -f /dev/null
 fi

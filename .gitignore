@@ -1,3 +1,2 @@
 .env
 nginx/backends.list
-tor/bridges.txt
