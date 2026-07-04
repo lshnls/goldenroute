@@ -160,6 +160,7 @@ WSTUNNEL_PROB=$(awk "BEGIN {printf \"%.6f\", $WSTUNNEL_BALANCE / 100}")
     iptables -t nat -A FW_LB -p tcp -m statistic --mode random --probability "$WSTUNNEL_PROB" -j REDIRECT --to-ports 12345
 iptables -t nat -A FW_LB -p tcp -j REDIRECT --to-ports 12346
 fi
+fi
 
 # -------------------------------------------------------
 # 1. OUTPUT chain — traffic from the host itself
@@ -175,6 +176,7 @@ iptables -t nat -A "$OUTPUT_CHAIN" -d 192.168.0.0/16 -j RETURN
 # tor-only: forced through Tor before everything else
 iptables -t nat -A "$OUTPUT_CHAIN" -m set --match-set tor-only dst -p tcp -j REDIRECT --to-ports 12346
 
+if [ "$PROXY_ENABLED" != "no" ]; then
 iptables -t nat -A "$OUTPUT_CHAIN" -m set --match-set russian-ips dst -j RETURN
 iptables -t nat -A "$OUTPUT_CHAIN" -p tcp --dport 12345 -j RETURN
 iptables -t nat -A "$OUTPUT_CHAIN" -p tcp --dport "${SOCKS5_PORT}" -j RETURN
