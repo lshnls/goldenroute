@@ -1,6 +1,6 @@
 FROM alpine:3.22
 
-RUN apk add --no-cache iptables ipset redsocks curl jq
+RUN apk add --no-cache iptables ipset redsocks curl jq netcat-openbsd
 
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
