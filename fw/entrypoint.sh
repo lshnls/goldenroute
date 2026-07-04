@@ -22,24 +22,15 @@ fi
 
 # Determine proxy mode
 if [ "$TOR_BALANCE" -eq 0 ] && [ "$WSTUNNEL_BALANCE" -eq 0 ]; then
-    PROXY_ENABLED="no"
     echo "[fw] Proxy disabled — all traffic direct"
-elif [ "$TOR_BALANCE" -eq 0 ]; then
-    PROXY_ENABLED="wstunnel"
-    echo "[fw] Backend: wstunnel only"
-elif [ "$WSTUNNEL_BALANCE" -eq 0 ]; then
-    PROXY_ENABLED="tor"
-    echo "[fw] Backend: tor only"
-else
-    PROXY_ENABLED="load_balancing"
-    echo "[fw] Backend: load balancing (tor ${TOR_BALANCE}% + wstunnel ${WSTUNNEL_BALANCE}%)"
-fi
-
-# Set SOCKS5 port based on active backend
-if [ "$PROXY_ENABLED" = "wstunnel" ] || [ "$PROXY_ENABLED" = "load_balancing" ]; then
-    SOCKS5_PORT="${LLP_SOCKS5_PROXY:-41080}"
-else
     SOCKS5_PORT="${TOR_SOCKS_PORT:-9050}"
+else
+    echo "[fw] Proxy active — balancing: wstunnel ${WSTUNNEL_BALANCE}% / tor ${TOR_BALANCE}%"
+    if [ "$WSTUNNEL_BALANCE" -eq 0 ]; then
+        SOCKS5_PORT="${TOR_SOCKS_PORT:-9050}"
+    else
+        SOCKS5_PORT="${LLP_SOCKS5_PROXY:-41080}"
+    fi
 fi
 
 
@@ -93,7 +84,7 @@ else
     echo "[fw] $TOR_ONLY_IPS_FILE not found or empty — no tor-only IPs"
 fi
 
-if [ "$PROXY_ENABLED" != "no" ]; then
+if [ "$TOR_BALANCE" -ne 0 ] || [ "$WSTUNNEL_BALANCE" -ne 0 ]; then
 
 # load Russian IP ranges from cached file, then update in background
 if [ -s "$RUSSIAN_IPS_FILE" ]; then
@@ -154,12 +145,10 @@ REDSOCKS_PID=$!
 sleep 1
 kill -0 "$REDSOCKS_PID" 2>/dev/null || { echo "[fw] redsocks failed to start"; exit 1; }
 
-if [ "$PROXY_ENABLED" = "load_balancing" ]; then
 iptables -t nat -N FW_LB 2>/dev/null || iptables -t nat -F FW_LB
 WSTUNNEL_PROB=$(awk "BEGIN {printf \"%.6f\", $WSTUNNEL_BALANCE / 100}")
     iptables -t nat -A FW_LB -p tcp -m statistic --mode random --probability "$WSTUNNEL_PROB" -j REDIRECT --to-ports 12345
 iptables -t nat -A FW_LB -p tcp -j REDIRECT --to-ports 12346
-fi
 fi
 
 # -------------------------------------------------------
@@ -176,17 +165,13 @@ iptables -t nat -A "$OUTPUT_CHAIN" -d 192.168.0.0/16 -j RETURN
 # tor-only: forced through Tor before everything else
 iptables -t nat -A "$OUTPUT_CHAIN" -m set --match-set tor-only dst -p tcp -j REDIRECT --to-ports 12346
 
-if [ "$PROXY_ENABLED" != "no" ]; then
+if [ "$TOR_BALANCE" -ne 0 ] || [ "$WSTUNNEL_BALANCE" -ne 0 ]; then
 iptables -t nat -A "$OUTPUT_CHAIN" -m set --match-set russian-ips dst -j RETURN
 iptables -t nat -A "$OUTPUT_CHAIN" -p tcp --dport 12345 -j RETURN
-iptables -t nat -A "$OUTPUT_CHAIN" -p tcp --dport "${SOCKS5_PORT}" -j RETURN
-if [ "$PROXY_ENABLED" = "load_balancing" ]; then
-iptables -t nat -A "$OUTPUT_CHAIN" -p tcp --dport 9050 -j RETURN
 iptables -t nat -A "$OUTPUT_CHAIN" -p tcp --dport 12346 -j RETURN
+iptables -t nat -A "$OUTPUT_CHAIN" -p tcp --dport "${SOCKS5_PORT}" -j RETURN
+iptables -t nat -A "$OUTPUT_CHAIN" -p tcp --dport 9050 -j RETURN
 iptables -t nat -A "$OUTPUT_CHAIN" -p tcp -j FW_LB
-else
-iptables -t nat -A "$OUTPUT_CHAIN" -p tcp -j REDIRECT --to-ports 12345
-fi
 fi
 
 # start redsocks-tor for tor-only IPs (in any mode, not just load_balancing)
@@ -213,7 +198,7 @@ fi
 # -------------------------------------------------------
 
 # Redirect DNS to unbound
-if [ "$PROXY_ENABLED" != "no" ]; then
+if [ "$TOR_BALANCE" -ne 0 ] || [ "$WSTUNNEL_BALANCE" -ne 0 ]; then
     iptables -t nat -A "$OUTPUT_CHAIN" -p udp --dport 53 -j REDIRECT --to-ports 53
     iptables -t nat -A "$OUTPUT_CHAIN" -p tcp --dport 53 -j REDIRECT --to-ports 53
 fi
@@ -231,23 +216,15 @@ iptables -t nat -A "$CHAIN_NAME" -d 192.168.0.0/16 -j RETURN
 # tor-only: forced through Tor before everything else
 iptables -t nat -A "$CHAIN_NAME" -m set --match-set tor-only dst -p tcp -j REDIRECT --to-ports 12346
 
-if [ "$PROXY_ENABLED" != "no" ]; then
+if [ "$TOR_BALANCE" -ne 0 ] || [ "$WSTUNNEL_BALANCE" -ne 0 ]; then
 iptables -t nat -A "$CHAIN_NAME" -m set --match-set russian-ips dst -j RETURN
 iptables -t nat -A "$CHAIN_NAME" -p tcp --dport 12345 -j RETURN
-iptables -t nat -A "$CHAIN_NAME" -p tcp --dport "${SOCKS5_PORT}" -j RETURN
-if [ "$PROXY_ENABLED" = "load_balancing" ]; then
-iptables -t nat -A "$CHAIN_NAME" -p tcp --dport 9050 -j RETURN
 iptables -t nat -A "$CHAIN_NAME" -p tcp --dport 12346 -j RETURN
-fi
-fi
-if [ "$PROXY_ENABLED" != "no" ]; then
+iptables -t nat -A "$CHAIN_NAME" -p tcp --dport "${SOCKS5_PORT}" -j RETURN
+iptables -t nat -A "$CHAIN_NAME" -p tcp --dport 9050 -j RETURN
 iptables -t nat -A "$CHAIN_NAME" -p udp --dport 53 -j REDIRECT --to-ports 53
 iptables -t nat -A "$CHAIN_NAME" -p tcp --dport 53 -j REDIRECT --to-ports 53
-if [ "$PROXY_ENABLED" = "load_balancing" ]; then
 iptables -t nat -A "$CHAIN_NAME" -p tcp -j FW_LB
-else
-iptables -t nat -A "$CHAIN_NAME" -p tcp -j REDIRECT --to-ports 12345
-fi
 fi
 
 # -------------------------------------------------------
@@ -259,7 +236,7 @@ iptables -I DOCKER-USER -d 192.168.1.0/24 -j ACCEPT 2>/dev/null || true
 # -------------------------------------------------------
 # 5. FW_LB — load balancing chain
 # -------------------------------------------------------
-if [ "$PROXY_ENABLED" = "load_balancing" ]; then
+if [ "$TOR_BALANCE" -ne 0 ] || [ "$WSTUNNEL_BALANCE" -ne 0 ]; then
 healthcheck_loop() {
     while true; do
         sleep 30
@@ -289,14 +266,8 @@ iptables -t nat -A POSTROUTING -s 192.168.1.0/24 ! -d 192.168.1.0/24 -j MASQUERA
 RULES_APPLIED=1
 
 echo "[fw] Firewall ready"
-echo "       Mode: $PROXY_ENABLED"
-if [ "$PROXY_ENABLED" != "no" ]; then
-if [ "$PROXY_ENABLED" = "load_balancing" ]; then
-echo "       Load balancing: wstunnel(:12345) + tor(:12346)"
-else
-echo "       Host TCP(OUTPUT) → redsocks → ${PROXY_ENABLED}"
-echo "       LAN TCP(PREROUTING) → redsocks → ${PROXY_ENABLED}"
-fi
+if [ "$TOR_BALANCE" -ne 0 ] || [ "$WSTUNNEL_BALANCE" -ne 0 ]; then
+echo "       Balancing: wstunnel(:12345) = ${WSTUNNEL_BALANCE}% / tor(:12346) = ${TOR_BALANCE}%"
 fi
 echo "       tor-only IPs → tor(:12346)"
 echo "       LAN DNS → unbound :53"
