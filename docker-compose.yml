@@ -48,6 +48,8 @@ services:
 #      - PROXY_BACKEND=${PROXY_BACKEND:-wstunnel} # obsolete
       - TOR_BALANCE=${TOR_BALANCE:-70}
       - WSTUNNEL_BALANCE=${WSTUNNEL_BALANCE:-30}
+      - LLP_SOCKS5_PROXY=${LLP_SOCKS5_PROXY:-41080}
+      - LLP_HTTP_PROXY=${LLP_HTTP_PROXY:-43128}
       - TOR_SOCKS_PORT=${TOR_SOCKS_PORT:-9050}
   nginx:
     image: docker.io/nginx:alpine
@@ -75,8 +77,7 @@ services:
       - ./unbound/unbound.conf:/etc/unbound/unbound.conf
       - unbound_data:/var/lib/unbound
     command: unbound -d -c /etc/unbound/unbound.conf
-
-  # Временно отключен, чтобы не мешал
+  
   tor:
     build:
       context: ./tor
