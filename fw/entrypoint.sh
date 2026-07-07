@@ -1,5 +1,5 @@
 #!/bin/sh
-set -eu
+set -ex
 set -o pipefail
 
 CHAIN_NAME="FW_REDIRECT"
@@ -55,22 +55,13 @@ reset_nat_chain() {
 }
 
 cleanup() {
-    cleanup_chain "$CHAIN_NAME" PREROUTING
-    cleanup_chain "$OUTPUT_CHAIN" OUTPUT
+    echo "[fw] cleanup triggered"
+    # We keep the chains to prevent traffic bypass during restarts
     if [ -n "${HEALTH_PID:-}" ]; then
         kill "$HEALTH_PID" 2>/dev/null || true
-        wait "$HEALTH_PID" 2>/dev/null || true
         HEALTH_PID=""
     fi
-    iptables -t nat -F "$LB_CHAIN" 2>/dev/null || true
-    iptables -t nat -X "$LB_CHAIN" 2>/dev/null || true
-    iptables -D DOCKER-USER -s "$LAN_CIDR" -j ACCEPT 2>/dev/null || true
-    iptables -D DOCKER-USER -d "$LAN_CIDR" -j ACCEPT 2>/dev/null || true
-    iptables -t nat -D POSTROUTING -s "$LAN_CIDR" ! -d "$LAN_CIDR" -j MASQUERADE 2>/dev/null || true
-    ipset destroy russian-ips-tmp 2>/dev/null || true
-    ipset destroy russian-ips 2>/dev/null || true
-    ipset destroy tor-only 2>/dev/null || true
-    kill ${REDSOCKS_PID:-} ${REDSOCKS_TOR_PID:-} ${HEALTH_PID:-} 2>/dev/null || true
+    kill ${REDSOCKS_PID:-} ${REDSOCKS_TOR_PID:-} 2>/dev/null || true
     if [ "$RULES_APPLIED" = "1" ]; then
         echo "[fw] cleanup done"
     fi
@@ -83,7 +74,7 @@ load_ipset() {
     ipset create "$set_name" hash:net 2>/dev/null || ipset flush "$set_name"
 
     if [ -s "$file" ]; then
-        sed '/^#/d; /^$/d; s/^/add '"$set_name"' /' "$file" | ipset restore -!
+        sed "/^#/d; /^$/d; s/^/add $set_name /" "$file" | ipset restore -!
         count=$(ipset list "$set_name" | sed -n 's/^Number of entries: //p')
         echo "[fw] $set_name loaded from $file: ${count:-0} entries"
     else
@@ -153,15 +144,21 @@ append_common_returns() {
 }
 
 append_proxy_rules() {
-    chain="$1"
-    iptables -t nat -A "$chain" -m set --match-set russian-ips dst -j RETURN
+    local target_chain="$1"
+    echo "[fw] applying proxy rules to $target_chain"
+    
+    iptables -t nat -A "$target_chain" -m set --match-set russian-ips dst -j RETURN
+    
     for port in "$REDSOCKS_PORT" "$TOR_REDSOCKS_PORT" "$WSTUNNEL_SOCKS_PORT" "$TOR_SOCKS_PORT"; do
-        iptables -t nat -A "$chain" -p tcp --dport "$port" -j RETURN
+        iptables -t nat -A "$target_chain" -p tcp --dport "$port" -j RETURN
     done
-    iptables -t nat -A "$chain" -p udp --dport 53 -j REDIRECT --to-ports 53
-    iptables -t nat -A "$chain" -p tcp --dport 53 -j REDIRECT --to-ports 53
+    
+    iptables -t nat -A "$target_chain" -p udp --dport 53 -j REDIRECT --to-ports 53
+    iptables -t nat -A "$target_chain" -p tcp --dport 53 -j REDIRECT --to-ports 53
+    
     ensure_nat_chain_exists "$LB_CHAIN"
-    iptables -t nat -A "$chain" -p tcp -j "$LB_CHAIN"
+    iptables -t nat -A "$target_chain" -p tcp -j "$LB_CHAIN"
+    echo "[fw] LB rule added: $target_chain -> $LB_CHAIN"
 }
 
 configure_lb() {
@@ -200,7 +197,9 @@ healthcheck_loop() {
 }
 
 validate_balance
-cleanup
+# Initial cleanup of main hooks to avoid duplicates
+cleanup_chain "$CHAIN_NAME" PREROUTING
+cleanup_chain "$OUTPUT_CHAIN" OUTPUT
 load_ipset tor-only "$TOR_ONLY_IPS_FILE"
 
 if proxy_enabled; then
@@ -236,7 +235,7 @@ if proxy_enabled; then
 fi
 
 iptables -t nat -N "$CHAIN_NAME" 2>/dev/null || true
-iptables -t nat -A PREROUTING -j "$CHAIN_NAME"
+iptables -t nat -I PREROUTING -j "$CHAIN_NAME"
 iptables -t nat -A "$CHAIN_NAME" -m addrtype --dst-type LOCAL -j RETURN
 iptables -t nat -A "$CHAIN_NAME" -s 172.16.0.0/12 -j RETURN
 append_common_returns "$CHAIN_NAME"
@@ -261,6 +260,7 @@ echo "       tor-only IPs → tor(:$TOR_REDSOCKS_PORT)"
 echo "       LAN DNS → unbound :53"
 echo "       LAN FORWARD + MASQUERADE enabled for $LAN_CIDR"
 
-WAIT_PIDS="${REDSOCKS_PID:-} ${REDSOCKS_TOR_PID:-} ${HEALTH_PID:-}"
-# shellcheck disable=SC2086
-[ -n "$(printf '%s' "$WAIT_PIDS" | tr -d ' ')" ] && wait $WAIT_PIDS || tail -f /dev/null
+# Keep the container alive indefinitely
+while true; do
+    sleep 3600
+done
