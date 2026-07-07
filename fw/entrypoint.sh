@@ -43,14 +43,15 @@ cleanup_chain() {
     iptables -t nat -X "$chain" 2>/dev/null || true
 }
 
-ensure_nat_chain() {
-    chain="$1"
-    iptables -t nat -N "$chain" 2>/dev/null || iptables -t nat -F "$chain"
-}
-
 ensure_nat_chain_exists() {
     chain="$1"
-    iptables -t nat -N "$chain" 2>/dev/null || true
+    iptables -t nat -L "$chain" >/dev/null 2>&1 || iptables -t nat -N "$chain"
+}
+
+reset_nat_chain() {
+    chain="$1"
+    ensure_nat_chain_exists "$chain"
+    iptables -t nat -F "$chain"
 }
 
 cleanup() {
@@ -157,7 +158,7 @@ append_proxy_rules() {
 }
 
 configure_lb() {
-    ensure_nat_chain "$LB_CHAIN"
+    reset_nat_chain "$LB_CHAIN"
 
     if [ "$WSTUNNEL_BALANCE" -eq 100 ]; then
         iptables -t nat -A "$LB_CHAIN" -p tcp -j REDIRECT --to-ports "$REDSOCKS_PORT"
@@ -176,7 +177,7 @@ healthcheck_loop() {
         tor=false
         nc -z -w2 127.0.0.1 "$WSTUNNEL_SOCKS_PORT" 2>/dev/null && wstunnel=true
         nc -z -w2 127.0.0.1 "$TOR_SOCKS_PORT" 2>/dev/null && tor=true
-        ensure_nat_chain "$LB_CHAIN"
+        reset_nat_chain "$LB_CHAIN"
 
         if $wstunnel && $tor; then
             configure_lb
@@ -220,7 +221,7 @@ iptables -t nat -I OUTPUT -j "$OUTPUT_CHAIN"
 append_common_returns "$OUTPUT_CHAIN"
 iptables -t nat -A "$OUTPUT_CHAIN" -m set --match-set tor-only dst -p tcp -j REDIRECT --to-ports "$TOR_REDSOCKS_PORT"
 if proxy_enabled; then
-    configure_lb
+    ensure_nat_chain_exists "$LB_CHAIN"
     append_proxy_rules "$OUTPUT_CHAIN"
 fi
 
@@ -233,6 +234,7 @@ iptables -t nat -A "$CHAIN_NAME" -m set --match-set tor-only dst -p tcp -j REDIR
 proxy_enabled && append_proxy_rules "$CHAIN_NAME"
 
 if proxy_enabled; then
+    configure_lb
     healthcheck_loop &
     HEALTH_PID=$!
 fi
