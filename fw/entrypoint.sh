@@ -50,13 +50,18 @@ ensure_nat_chain_exists() {
 
 reset_nat_chain() {
     chain="$1"
-    ensure_nat_chain_exists "$chain"
-    iptables -t nat -F "$chain"
+    ensure_nat_chain_exists "$chain" || return 1
+    iptables -t nat -F "$chain" || return 1
 }
 
 cleanup() {
     cleanup_chain "$CHAIN_NAME" PREROUTING
     cleanup_chain "$OUTPUT_CHAIN" OUTPUT
+    if [ -n "${HEALTH_PID:-}" ]; then
+        kill "$HEALTH_PID" 2>/dev/null || true
+        wait "$HEALTH_PID" 2>/dev/null || true
+        HEALTH_PID=""
+    fi
     iptables -t nat -F "$LB_CHAIN" 2>/dev/null || true
     iptables -t nat -X "$LB_CHAIN" 2>/dev/null || true
     iptables -D DOCKER-USER -s "$LAN_CIDR" -j ACCEPT 2>/dev/null || true
@@ -90,7 +95,9 @@ update_russian_ips() {
     for attempt in 1 2 3 4; do
         tmp=$(mktemp)
         if curl -sS --max-time 30 "$RIPE_URL" 2>/dev/null | jq -r '.data.resources.ipv4[]' > "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
-            cp "$tmp" "$RUSSIAN_IPS_FILE"
+            if ! cat "$tmp" > "$RUSSIAN_IPS_FILE"; then
+                echo "[fw] warning: cannot update $RUSSIAN_IPS_FILE; keeping existing file" >&2
+            fi
             ipset create russian-ips-tmp hash:net 2>/dev/null || ipset flush russian-ips-tmp
             sed 's/^/add russian-ips-tmp /' "$tmp" | ipset restore -!
             ipset swap russian-ips-tmp russian-ips
@@ -177,7 +184,10 @@ healthcheck_loop() {
         tor=false
         nc -z -w2 127.0.0.1 "$WSTUNNEL_SOCKS_PORT" 2>/dev/null && wstunnel=true
         nc -z -w2 127.0.0.1 "$TOR_SOCKS_PORT" 2>/dev/null && tor=true
-        reset_nat_chain "$LB_CHAIN"
+        if ! reset_nat_chain "$LB_CHAIN"; then
+            echo "[fw] warning: failed to reset $LB_CHAIN; retrying healthcheck later" >&2
+            continue
+        fi
 
         if $wstunnel && $tor; then
             configure_lb
