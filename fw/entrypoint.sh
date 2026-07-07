@@ -38,9 +38,19 @@ validate_balance() {
 cleanup_chain() {
     chain="$1"
     hook="$2"
-    iptables -t nat -D "$hook" -j "$chain" 2>/dev/null || true
+    while iptables -t nat -D "$hook" -j "$chain" 2>/dev/null; do :; done
     iptables -t nat -F "$chain" 2>/dev/null || true
     iptables -t nat -X "$chain" 2>/dev/null || true
+}
+
+ensure_nat_chain() {
+    chain="$1"
+    iptables -t nat -N "$chain" 2>/dev/null || iptables -t nat -F "$chain"
+}
+
+ensure_nat_chain_exists() {
+    chain="$1"
+    iptables -t nat -N "$chain" 2>/dev/null || true
 }
 
 cleanup() {
@@ -142,11 +152,12 @@ append_proxy_rules() {
     done
     iptables -t nat -A "$chain" -p udp --dport 53 -j REDIRECT --to-ports 53
     iptables -t nat -A "$chain" -p tcp --dport 53 -j REDIRECT --to-ports 53
+    ensure_nat_chain_exists "$LB_CHAIN"
     iptables -t nat -A "$chain" -p tcp -j "$LB_CHAIN"
 }
 
 configure_lb() {
-    iptables -t nat -N "$LB_CHAIN" 2>/dev/null || iptables -t nat -F "$LB_CHAIN"
+    ensure_nat_chain "$LB_CHAIN"
 
     if [ "$WSTUNNEL_BALANCE" -eq 100 ]; then
         iptables -t nat -A "$LB_CHAIN" -p tcp -j REDIRECT --to-ports "$REDSOCKS_PORT"
@@ -165,7 +176,7 @@ healthcheck_loop() {
         tor=false
         nc -z -w2 127.0.0.1 "$WSTUNNEL_SOCKS_PORT" 2>/dev/null && wstunnel=true
         nc -z -w2 127.0.0.1 "$TOR_SOCKS_PORT" 2>/dev/null && tor=true
-        iptables -t nat -F "$LB_CHAIN" 2>/dev/null || true
+        ensure_nat_chain "$LB_CHAIN"
 
         if $wstunnel && $tor; then
             configure_lb
