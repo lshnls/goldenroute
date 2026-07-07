@@ -208,7 +208,10 @@ iptables -t nat -N "$OUTPUT_CHAIN" 2>/dev/null || true
 iptables -t nat -I OUTPUT -j "$OUTPUT_CHAIN"
 append_common_returns "$OUTPUT_CHAIN"
 iptables -t nat -A "$OUTPUT_CHAIN" -m set --match-set tor-only dst -p tcp -j REDIRECT --to-ports "$TOR_REDSOCKS_PORT"
-proxy_enabled && append_proxy_rules "$OUTPUT_CHAIN"
+if proxy_enabled; then
+    configure_lb
+    append_proxy_rules "$OUTPUT_CHAIN"
+fi
 
 iptables -t nat -N "$CHAIN_NAME" 2>/dev/null || true
 iptables -t nat -A PREROUTING -j "$CHAIN_NAME"
@@ -219,7 +222,6 @@ iptables -t nat -A "$CHAIN_NAME" -m set --match-set tor-only dst -p tcp -j REDIR
 proxy_enabled && append_proxy_rules "$CHAIN_NAME"
 
 if proxy_enabled; then
-    configure_lb
     healthcheck_loop &
     HEALTH_PID=$!
 fi
