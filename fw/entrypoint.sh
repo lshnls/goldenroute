@@ -186,7 +186,7 @@ configure_lb() {
 
 # Цикл проверки «здоровья» прокси‑служб
 healthcheck_loop() {
-    while sleep 120; do
+    while sleep 60; do
         wstunnel=false
         tor=false
         # Проверка доступности wstunnel
@@ -262,7 +262,7 @@ iptables -I DOCKER-USER -s "$LAN_CIDR" -j ACCEPT 2>/dev/null || true
 iptables -I DOCKER-USER -d "$LAN_CIDR" -j ACCEPT 2>/dev/null || true
 iptables -t nat -A POSTROUTING -s "$LAN_CIDR" ! -d "$LAN_CIDR" -j MASQUERADE
 # Block UDP QUIC (port 443) for foreign IPs
-iptables -A INPUT -p udp --dport 443 -s ! 127.0.0.1 -j DROP
+iptables -A INPUT -p udp --dport 443 ! -s 127.0.0.1 -j DROP
 
 echo "[fw] Firewall ready"
 proxy_enabled && echo "       Balancing: wstunnel(:$REDSOCKS_PORT) = ${WSTUNNEL_BALANCE}% / tor(:$TOR_REDSOCKS_PORT) = ${TOR_BALANCE}%"
