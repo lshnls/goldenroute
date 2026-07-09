@@ -12,8 +12,8 @@ LAN_CIDR="${LAN_CIDR:-192.168.1.0/24}" # Локальная подсеть (по
 RUSSIAN_IPS_FILE="/etc/goldenroute/russian-ips.txt"
 TOR_ONLY_IPS_FILE="/etc/goldenroute/tor-only-ips.txt"
 RIPE_URL="https://stat.ripe.net/data/country-resource-list/data.json?resource=RU" # Источник обновления рус. IP
-REDSOCKS_PORT=12345                   # Порт wstunnel (redsocks)
-TOR_REDSOCKS_PORT=12346               # Порт Tor (redsocks)
+REDSOCKS_PORT="${REDSOCKS_PORT:-12345}"                   # Порт wstunnel (redsocks)
+TOR_REDSOCKS_PORT="${TOR_REDSOCKS_PORT:-12346}"               # Порт Tor (redsocks)
 TOR_SOCKS_PORT="${TOR_SOCKS_PORT:-9050}"   # Порт Tor
 WSTUNNEL_SOCKS_PORT="${LLP_SOCKS5_PROXY:-41080}" # Порт wstunnel
 
@@ -225,6 +225,11 @@ if proxy_enabled; then
         write_redsocks_config /tmp/redsocks.conf "$REDSOCKS_PORT" "$WSTUNNEL_SOCKS_PORT"
         start_redsocks redsocks /tmp/redsocks.conf
         REDSOCKS_PID="$STARTED_PID"
+    fi
+    if [ "$TOR_BALANCE" -gt 0 ]; then
+        write_redsocks_config /tmp/redsocks-tor.conf "$TOR_REDSOCKS_PORT" "$TOR_SOCKS_PORT"
+        start_redsocks tor-redsocks /tmp/redsocks-tor.conf
+        TOR_REDSOCKS_PID="$STARTED_PID"
     fi
 else
     echo "[fw] Proxy disabled — all traffic direct"
