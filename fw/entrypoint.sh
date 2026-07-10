@@ -266,8 +266,15 @@ fi
 iptables -I DOCKER-USER -s "$LAN_CIDR" -j ACCEPT 2>/dev/null || true
 iptables -I DOCKER-USER -d "$LAN_CIDR" -j ACCEPT 2>/dev/null || true
 iptables -t nat -A POSTROUTING -s "$LAN_CIDR" ! -d "$LAN_CIDR" -j MASQUERADE
-# Block UDP QUIC (port 443) for foreign IPs
-iptables -A INPUT -p udp --dport 443 ! -s 127.0.0.1 -j DROP
+# QUIC blocking: allow to Russian IPs, block to foreign IPs (forces TCP fallback into proxy)
+while iptables -D FORWARD -p udp --dport 443 -j DROP 2>/dev/null; do :; done
+while iptables -D FORWARD -p udp --dport 443 -m set ! --match-set russian-ips dst -j DROP 2>/dev/null; do :; done
+while iptables -D OUTPUT -p udp --dport 443 ! -s 127.0.0.1 -j DROP 2>/dev/null; do :; done
+while iptables -D OUTPUT -p udp --dport 443 ! -s 127.0.0.1 -m set ! --match-set russian-ips dst -j DROP 2>/dev/null; do :; done
+if proxy_enabled; then
+    iptables -A FORWARD -p udp --dport 443 -m set ! --match-set russian-ips dst -j DROP
+    iptables -A OUTPUT -p udp --dport 443 ! -s 127.0.0.1 -m set ! --match-set russian-ips dst -j DROP
+fi
 
 echo "[fw] Firewall ready"
 proxy_enabled && echo "       Balancing: wstunnel(:$REDSOCKS_PORT) = ${WSTUNNEL_BALANCE}% / tor(:$TOR_REDSOCKS_PORT) = ${TOR_BALANCE}%"
