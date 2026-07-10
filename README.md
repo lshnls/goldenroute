@@ -1,4 +1,4 @@
-# GOLDENROUTE™ — INFRASTRUCTURE DIVISION
+# GOLDENROUTE — INFRASTRUCTURE DIVISION
 
 Прозрачный прокси-шлюз для обхода блокировок. Единственный бэкенд — Tor.
 
