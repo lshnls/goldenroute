@@ -9,7 +9,7 @@ x-proxy-env: &proxy-env
 
 # LL_IPV4_ADDR="127.0.0.1"
 # IP-адрес хоста с прокси (по умолчанию 127.0.0.1)
-# если 0,0,0,0 то НЕОБХОДИМА установка параметра PAC_PROXY_HOST !
+# если 0,0.0.0 то НЕОБХОДИМА установка параметра PAC_PROXY_HOST !
 # LLP_SOCKS5_PROXY="31080"
 # порт SOCKS5 (по умолчанию 31080)
 # LLP_HTTP_PROXY="33128"
@@ -39,8 +39,17 @@ services:
       - NET_ADMIN
       - NET_RAW
     restart: unless-stopped
+    depends_on:
+      - unbound
+    volumes:
+      - ./fw/russian-ips.txt:/etc/goldenroute/russian-ips.txt
+      - ./fw/tor-only-ips.txt:/etc/goldenroute/tor-only-ips.txt:ro
     environment:
-      - PROXY_BACKEND=${PROXY_BACKEND:-wstunnel}
+#      - PROXY_BACKEND=${PROXY_BACKEND:-wstunnel} # obsolete
+      - TOR_BALANCE=${TOR_BALANCE:-50}
+      - WSTUNNEL_BALANCE=${WSTUNNEL_BALANCE:-50}
+      - LLP_SOCKS5_PROXY=${LLP_SOCKS5_PROXY:-41080}
+      - LLP_HTTP_PROXY=${LLP_HTTP_PROXY:-43128}
       - TOR_SOCKS_PORT=${TOR_SOCKS_PORT:-9050}
   nginx:
     image: docker.io/nginx:alpine
@@ -68,8 +77,7 @@ services:
       - ./unbound/unbound.conf:/etc/unbound/unbound.conf
       - unbound_data:/var/lib/unbound
     command: unbound -d -c /etc/unbound/unbound.conf
-
-  # Временно отключен, чтобы не мешал
+  
   tor:
     build:
       context: ./tor
@@ -81,11 +89,11 @@ services:
       - ${TOR_CONTROL_PORT:-9051}:9051/tcp
     volumes:
       - ./tor/torrc:/etc/tor/torrc
-      - ./tor/bridges.txt:/etc/tor/bridges.txt
+      - ./tor/bridges.txt:/etc/tor/bridges.txt:ro
       - tor_data:/var/lib/tor
 
 volumes:
   unbound_data:
     driver: local
   tor_data:
-    driver: local 
+    driver: local

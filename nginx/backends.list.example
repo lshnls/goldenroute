@@ -1,3 +1,0 @@
-#<ip>[:<port>];<base64_auth>;[<server_name>]
-# Пример:
-# p1.stt.ru:443;dXNlcjpwYXNzd29yZAo=;example.com

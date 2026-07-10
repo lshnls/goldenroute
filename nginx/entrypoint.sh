@@ -1,6 +1,10 @@
 #!/bin/sh
 set -e
 
+# ===== 1. Auto-create backends.list from example if missing =====
+# Hard-coded path because docker-compose entrypoint doesn't pass env vars
+BACKENDS_FILE="/etc/nginx/backends.list"
+
 # ===== 2. Подготовка временных файлов для конфигурации бэкендов =====
 UPSTREAM_FILE=$(mktemp)
 SERVER_FILE=$(mktemp)

@@ -1,72 +1,123 @@
 #!/bin/sh
-set -eu
+# Резервный вариант: настройка брандмауэра и прокси‑службы с подробными комментариями
+# --------------------------------------------------------------
+# Основные переменные и цепочки iptables
+# --------------------------------------------------------------
+CHAIN_NAME="FW_REDIRECT"              # Цепочка, которая перенаправляет трафик
+OUTPUT_CHAIN="FW_OUTPUT"              # Цепочка обработки исходящего трафика
+LB_CHAIN="FW_LB"                      # Цепочка балансировки между прокси
+LAN_CIDR="${LAN_CIDR:-192.168.1.0/24}" # Локальная подсеть (по умолчанию 192.168.1.0/24)
 
-CHAIN_NAME="FW_REDIRECT"
-OUTPUT_CHAIN="FW_OUTPUT"
+# Порты и файлы
+RUSSIAN_IPS_FILE="/etc/goldenroute/russian-ips.txt"
+TOR_ONLY_IPS_FILE="/etc/goldenroute/tor-only-ips.txt"
+RIPE_URL="https://stat.ripe.net/data/country-resource-list/data.json?resource=RU" # Источник обновления рус. IP
+REDSOCKS_PORT="${REDSOCKS_PORT:-12345}"                   # Порт wstunnel (redsocks)
+TOR_REDSOCKS_PORT="${TOR_REDSOCKS_PORT:-12346}"               # Порт Tor (redsocks)
+TOR_SOCKS_PORT="${TOR_SOCKS_PORT:-9050}"   # Порт Tor
+WSTUNNEL_SOCKS_PORT="${LLP_SOCKS5_PROXY:-41080}" # Порт wstunnel
+
+# Счётчики и PID‑ы
 RULES_APPLIED=0
+REDSOCKS_PID=""
+TOR_REDSOCKS_PID=""
+HEALTH_PID=""
 
-PROXY_BACKEND="${PROXY_BACKEND:-wstunnel}"
+# Функция: проверка, включён ли прокси
+proxy_enabled() {
+    [ "$TOR_BALANCE" -ne 0 ] || [ "$WSTUNNEL_BALANCE" -ne 0 ]
+}
 
-case "$PROXY_BACKEND" in
-    tor)
-        SOCKS5_PORT="${TOR_SOCKS_PORT:-9050}"
-        echo "[fw] Backend: tor (SOCKS5 :$SOCKS5_PORT)"
-        ;;
-    off)
-        SOCKS5_PORT=""
-        echo "[fw] Proxy disabled — all traffic direct"
-        ;;
-    *)
-        SOCKS5_PORT="${LLP_SOCKS5_PROXY:-41080}"
-        echo "[fw] Backend: wstunnel (SOCKS5 :$SOCKS5_PORT)"
-        ;;
-esac
-
-cleanup() {
-    if [ "$RULES_APPLIED" = "1" ]; then
-        iptables -D DOCKER-USER -s 192.168.1.0/24 -j ACCEPT 2>/dev/null || true
-        iptables -D DOCKER-USER -d 192.168.1.0/24 -j ACCEPT 2>/dev/null || true
-        iptables -t nat -D POSTROUTING -s 192.168.1.0/24 ! -d 192.168.1.0/24 -j MASQUERADE 2>/dev/null || true
-        iptables -t nat -D PREROUTING -j "$CHAIN_NAME" 2>/dev/null || true
-        iptables -t nat -F "$CHAIN_NAME" 2>/dev/null || true
-        iptables -t nat -X "$CHAIN_NAME" 2>/dev/null || true
-        iptables -t nat -D OUTPUT -j "$OUTPUT_CHAIN" 2>/dev/null || true
-        iptables -t nat -F "$OUTPUT_CHAIN" 2>/dev/null || true
-        iptables -t nat -X "$OUTPUT_CHAIN" 2>/dev/null || true
-        ipset destroy russian-ips 2>/dev/null || true
-        ipset destroy russian-ips-tmp 2>/dev/null || true
+# Функция: проверка корректности балансов
+validate_balance() {
+    case "$TOR_BALANCE:$WSTUNNEL_BALANCE" in
+        *[!0-9:]*|:*) echo "ERROR: balances must be non-negative integers" >&2; exit 1 ;;
+    esac
+    if proxy_enabled && [ $((TOR_BALANCE + WSTUNNEL_BALANCE)) -ne 100 ]; then
+        echo "ERROR: TOR_BALANCE + WSTUNNEL_BALANCE must equal 100, or both must be 0" >&2
+        exit 1
     fi
 }
-trap cleanup EXIT SIGTERM SIGINT
 
-# flush stale rules from previous runs
-iptables -t nat -D PREROUTING -j "$CHAIN_NAME" 2>/dev/null || true
-iptables -t nat -F "$CHAIN_NAME" 2>/dev/null || true
-iptables -t nat -X "$CHAIN_NAME" 2>/dev/null || true
-iptables -t nat -D OUTPUT -j "$OUTPUT_CHAIN" 2>/dev/null || true
-iptables -t nat -F "$OUTPUT_CHAIN" 2>/dev/null || true
-iptables -t nat -X "$OUTPUT_CHAIN" 2>/dev/null || true
-iptables -D DOCKER-USER -s 192.168.1.0/24 -j ACCEPT 2>/dev/null || true
-iptables -D DOCKER-USER -d 192.168.1.0/24 -j ACCEPT 2>/dev/null || true
-iptables -t nat -D POSTROUTING -s 192.168.1.0/24 ! -d 192.168.1.0/24 -j MASQUERADE 2>/dev/null || true
+# Очистка цепочки iptables
+cleanup_chain() {
+    chain="$1"
+    hook="$2"
+    while iptables -t nat -D "$hook" -j "$chain" 2>/dev/null; do :; done
+    iptables -t nat -F "$chain" 2>/dev/null || true
+    iptables -t nat -X "$chain" 2>/dev/null || true
+}
 
-if [ -n "$SOCKS5_PORT" ]; then
-# download Russian IP ranges from RIPE and load into ipset (atomic swap)
-ipset create russian-ips-tmp hash:net 2>/dev/null || ipset flush russian-ips-tmp
+# Сброс цепочки iptables
+reset_nat_chain() {
+    chain="$1"
+    ensure_nat_chain_exists "$chain" || return 1
+    iptables -t nat -F "$chain" || return 1
+}
 
-RIPE_URL="https://stat.ripe.net/data/country-resource-list/data.json?resource=RU"
-curl -sS --max-time 30 "$RIPE_URL" | \
-    jq -r '.data.resources.ipv4[]' | \
-    sed 's/^/add russian-ips-tmp /' | \
-    ipset restore -! || echo "[fw] Warning: failed to load Russian IPs from RIPE"
+# Создание цепочки, если её нет
+ensure_nat_chain_exists() {
+    chain="$1"
+    iptables -t nat -L "$chain" >/dev/null 2>&1 || iptables -t nat -N "$chain"
+}
 
-# atomically swap — main set is never flushed before load
-ipset create russian-ips hash:net 2>/dev/null || true
-ipset swap russian-ips-tmp russian-ips
-ipset destroy russian-ips-tmp
+# Основная процедура завершения
+cleanup() {
+    echo "[fw] cleanup triggered"
+    if [ -n "${HEALTH_PID:-}" ]; then
+        kill "$HEALTH_PID" 2>/dev/null || true
+        HEALTH_PID=""
+    fi
+    kill ${REDSOCKS_PID:-} ${TOR_REDSOCKS_PID:-} 2>/dev/null || true
+    if [ "$RULES_APPLIED" = "1" ]; then
+        echo "[fw] cleanup done"
+    fi
+}
+trap cleanup EXIT INT TERM
 
-# generate redsocks config with the selected backend
-cat > /tmp/redsocks.conf <<EOF
+# Управление IPSET‑ами
+load_ipset() {
+    set_name="$1"
+    file="$2"
+    ipset create "$set_name" hash:net 2>/dev/null || ipset flush "$set_name"
+
+    if [ -s "$file" ]; then
+        sed "/^#/d; /^$/d; s/^/add $set_name /" "$file" | ipset restore -!
+        count=$(ipset list "$set_name" | sed -n 's/^Number of entries: //p')
+        echo "[fw] $set_name loaded from $file: ${count:-0} entries"
+    else
+        echo "[fw] $file not found or empty — $set_name is empty"
+    fi
+}
+
+# Обновление списка российских IP‑адресов
+update_russian_ips() {
+    for attempt in 1 2 3 4; do
+        tmp=$(mktemp)
+        if curl -sS --max-time 30 "$RIPE_URL" 2>/dev/null | jq -r '.data.resources.ipv4[]' > "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
+            if ! cat "$tmp" > "$RUSSIAN_IPS_FILE"; then
+                echo "[fw] warning: cannot update $RUSSIAN_IPS_FILE; keeping existing file" >&2
+            fi
+            ipset create russian-ips-tmp hash:net 2>/dev/null || ipset flush russian-ips-tmp
+            sed 's/^/add russian-ips-tmp /' "$tmp" | ipset restore -!
+            ipset swap russian-ips-tmp russian-ips
+            ipset destroy russian-ips-tmp
+            echo "[fw] RIPE updated: $(wc -l < "$tmp") ranges saved"
+            rm -f "$tmp"
+            return 0
+        fi
+        echo "[fw] RIPE download failed (attempt $attempt/4), retrying in 5s..."
+        rm -f "$tmp"
+        sleep 5
+    done
+}
+
+# Настройка redsocks
+write_redsocks_config() {
+    file="$1"
+    listen_port="$2"
+    upstream_port="$3"
+    cat > "$file" <<'EOF_CONF'
 base {
     log_debug = off;
     log_info = on;
@@ -74,85 +125,160 @@ base {
     daemon = off;
     redirector = iptables;
 }
-
 redsocks {
     local_ip = 0.0.0.0;
-    local_port = 12345;
+    local_port = %listen_port%;
     ip = 127.0.0.1;
-    port = ${SOCKS5_PORT};
+    port = %upstream_port%;
     type = socks5;
 }
-EOF
+EOF_CONF
+    sed -e "s/%listen_port%/$listen_port/g" -e "s/%upstream_port%/$upstream_port/g" "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+}
 
-# start redsocks
-redsocks -c /tmp/redsocks.conf &
-REDSOCKS_PID=$!
-sleep 1
-kill -0 "$REDSOCKS_PID" 2>/dev/null || { echo "[fw] redsocks failed to start"; exit 1; }
+# Запуск redsocks
+start_redsocks() {
+    name="$1"
+    config="$2"
+    redsocks -c "$config" &
+    pid=$!
+    sleep 1
+    kill -0 "$pid" 2>/dev/null || { echo "[fw] $name failed to start"; exit 1; }
+    STARTED_PID="$pid"
+}
 
-# -------------------------------------------------------
-# 1. OUTPUT chain — traffic from the host itself
-# -------------------------------------------------------
+# Добавление общих правил возврата (RETURN) в цепочку
+append_common_returns() {
+    chain="$1"
+    for cidr in 127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16; do
+        iptables -t nat -A "$chain" -d "$cidr" -j RETURN
+    done
+}
+
+# Добавление правил прокси
+append_proxy_rules() {
+    target_chain="$1"
+    echo "[fw] applying proxy rules to $target_chain"
+    iptables -t nat -A "$target_chain" -m set --match-set russian-ips dst -j RETURN
+    for port in "$REDSOCKS_PORT" "$TOR_REDSOCKS_PORT" "$WSTUNNEL_SOCKS_PORT" "$TOR_SOCKS_PORT"; do
+        iptables -t nat -A "$target_chain" -p tcp --dport "$port" -j RETURN
+    done
+    iptables -t nat -A "$target_chain" -p udp --dport 53 -j REDIRECT --to-ports 53
+    iptables -t nat -A "$target_chain" -p tcp --dport 53 -j REDIRECT --to-ports 53
+    ensure_nat_chain_exists "$LB_CHAIN"
+    iptables -t nat -A "$target_chain" -p tcp -j "$LB_CHAIN"
+    echo "[fw] LB rule added: $target_chain -> $LB_CHAIN"
+}
+
+# Настройка балансировки (configure_lb)
+configure_lb() {
+    reset_nat_chain "$LB_CHAIN"
+    if [ "$WSTUNNEL_BALANCE" -eq 100 ]; then
+        iptables -t nat -A "$LB_CHAIN" -p tcp -j REDIRECT --to-ports "$REDSOCKS_PORT"
+    elif [ "$TOR_BALANCE" -eq 100 ]; then
+        iptables -t nat -A "$LB_CHAIN" -p tcp -j REDIRECT --to-ports "$TOR_REDSOCKS_PORT"
+    else
+        probability=$(awk "BEGIN {printf \"%.6f\", $WSTUNNEL_BALANCE / 100}")
+        iptables -t nat -A "$LB_CHAIN" -p tcp -m statistic --mode random --probability "$probability" -j REDIRECT --to-ports "$REDSOCKS_PORT"
+        iptables -t nat -A "$LB_CHAIN" -p tcp -j REDIRECT --to-ports "$TOR_REDSOCKS_PORT"
+    fi
+}
+
+# Цикл проверки «здоровья» прокси‑служб
+healthcheck_loop() {
+    while sleep 60; do
+        wstunnel=false
+        tor=false
+        # Проверка доступности wstunnel
+        nc -z -w2 127.0.0.1 "$WSTUNNEL_SOCKS_PORT" 2>/dev/null && wstunnel=true
+        # Проверка Tor
+        nc -z -w2 127.0.0.1 "$TOR_SOCKS_PORT" 2>/dev/null && tor=true
+        # Перезапуск цепочки, чтобы избежать дублирования правил
+        if ! reset_nat_chain "$LB_CHAIN"; then
+            echo "[fw] warning: failed to reset $LB_CHAIN; retrying healthcheck later" >&2
+            continue
+        fi
+        # Реализация балансировки в зависимости от доступности
+        if $wstunnel && $tor; then
+            configure_lb
+        elif $wstunnel; then
+            iptables -t nat -A "$LB_CHAIN" -p tcp -j REDIRECT --to-ports "$REDSOCKS_PORT"
+        elif $tor; then
+            iptables -t nat -A "$LB_CHAIN" -p tcp -j REDIRECT --to-ports "$TOR_REDSOCKS_PORT"
+        fi
+    done
+}
+
+# --------------------- Основная логика ---------------------
+validate_balance
+# Очистка старой конфигурации, чтобы избежать дублирования
+cleanup_chain "$CHAIN_NAME" PREROUTING
+cleanup_chain "$OUTPUT_CHAIN" OUTPUT
+load_ipset tor-only "$TOR_ONLY_IPS_FILE"
+
+# Запуск прокси, если он включён
+if proxy_enabled; then
+    echo "[fw] Proxy active — balancing: wstunnel ${WSTUNNEL_BALANCE}% / tor ${TOR_BALANCE}%"
+    load_ipset russian-ips "$RUSSIAN_IPS_FILE"
+    update_russian_ips &
+    if [ "$WSTUNNEL_BALANCE" -gt 0 ]; then
+        write_redsocks_config /tmp/redsocks.conf "$REDSOCKS_PORT" "$WSTUNNEL_SOCKS_PORT"
+        start_redsocks redsocks /tmp/redsocks.conf
+        REDSOCKS_PID="$STARTED_PID"
+    fi
+    if [ "$TOR_BALANCE" -gt 0 ]; then
+        write_redsocks_config /tmp/redsocks-tor.conf "$TOR_REDSOCKS_PORT" "$TOR_SOCKS_PORT"
+        start_redsocks tor-redsocks /tmp/redsocks-tor.conf
+        TOR_REDSOCKS_PID="$STARTED_PID"
+    fi
+else
+    echo "[fw] Proxy disabled — all traffic direct"
+    ipset create russian-ips hash:net 2>/dev/null || true
+fi
+
+# Настройка цепочки OUTPUT и правилами для tor‑only IP‑сетов
 iptables -t nat -N "$OUTPUT_CHAIN" 2>/dev/null || true
 iptables -t nat -I OUTPUT -j "$OUTPUT_CHAIN"
-
-iptables -t nat -A "$OUTPUT_CHAIN" -d 127.0.0.0/8 -j RETURN
-iptables -t nat -A "$OUTPUT_CHAIN" -d 10.0.0.0/8 -j RETURN
-iptables -t nat -A "$OUTPUT_CHAIN" -d 172.16.0.0/12 -j RETURN
-iptables -t nat -A "$OUTPUT_CHAIN" -d 192.168.0.0/16 -j RETURN
-iptables -t nat -A "$OUTPUT_CHAIN" -m set --match-set russian-ips dst -j RETURN
-iptables -t nat -A "$OUTPUT_CHAIN" -p tcp --dport 12345 -j RETURN
-iptables -t nat -A "$OUTPUT_CHAIN" -p tcp --dport "${SOCKS5_PORT}" -j RETURN
-iptables -t nat -A "$OUTPUT_CHAIN" -p tcp -j REDIRECT --to-ports 12345
+append_common_returns "$OUTPUT_CHAIN"
+iptables -t nat -A "$OUTPUT_CHAIN" -m set --match-set tor-only dst -p tcp -j REDIRECT --to-ports "$TOR_REDSOCKS_PORT"
+if proxy_enabled; then
+    ensure_nat_chain_exists "$LB_CHAIN"
+    append_proxy_rules "$OUTPUT_CHAIN"
 fi
 
-# -------------------------------------------------------
-# 2. PREROUTING — forwarded traffic from LAN clients
-# -------------------------------------------------------
+# Настройка PREROUTING‑цепочки
 iptables -t nat -N "$CHAIN_NAME" 2>/dev/null || true
-iptables -t nat -A PREROUTING -j "$CHAIN_NAME"
-
+iptables -t nat -I PREROUTING -j "$CHAIN_NAME"
 iptables -t nat -A "$CHAIN_NAME" -m addrtype --dst-type LOCAL -j RETURN
 iptables -t nat -A "$CHAIN_NAME" -s 172.16.0.0/12 -j RETURN
-iptables -t nat -A "$CHAIN_NAME" -d 10.0.0.0/8 -j RETURN
-iptables -t nat -A "$CHAIN_NAME" -d 172.16.0.0/12 -j RETURN
-iptables -t nat -A "$CHAIN_NAME" -d 192.168.0.0/16 -j RETURN
-if [ -n "$SOCKS5_PORT" ]; then
-iptables -t nat -A "$CHAIN_NAME" -m set --match-set russian-ips dst -j RETURN
-iptables -t nat -A "$CHAIN_NAME" -p tcp --dport 12345 -j RETURN
-iptables -t nat -A "$CHAIN_NAME" -p tcp --dport "${SOCKS5_PORT}" -j RETURN
-fi
-iptables -t nat -A "$CHAIN_NAME" -p udp --dport 53 -j REDIRECT --to-ports 53
-iptables -t nat -A "$CHAIN_NAME" -p tcp --dport 53 -j REDIRECT --to-ports 53
-if [ -n "$SOCKS5_PORT" ]; then
-iptables -t nat -A "$CHAIN_NAME" -p tcp -j REDIRECT --to-ports 12345
+append_common_returns "$CHAIN_NAME"
+iptables -t nat -A "$CHAIN_NAME" -m set --match-set tor-only dst -p tcp -j REDIRECT --to-ports "$TOR_REDSOCKS_PORT"
+proxy_enabled && append_proxy_rules "$CHAIN_NAME"
+
+# Запуск health‑check в фоне, если прокси включён
+if proxy_enabled; then
+    configure_lb
+    healthcheck_loop &
+    HEALTH_PID=$!
 fi
 
-# -------------------------------------------------------
-# 3. FORWARD — allow LAN clients to route through gateway
-# -------------------------------------------------------
-iptables -I DOCKER-USER -s 192.168.1.0/24 -j ACCEPT 2>/dev/null || true
-iptables -I DOCKER-USER -d 192.168.1.0/24 -j ACCEPT 2>/dev/null || true
-
-# -------------------------------------------------------
-# 4. MASQUERADE — SNAT LAN traffic so replies come back here
-# -------------------------------------------------------
-iptables -t nat -A POSTROUTING -s 192.168.1.0/24 ! -d 192.168.1.0/24 -j MASQUERADE
-
-RULES_APPLIED=1
+# Дополнительные правила для Docker‑контейнеров и маскарадинг
+iptables -I DOCKER-USER -s "$LAN_CIDR" -j ACCEPT 2>/dev/null || true
+iptables -I DOCKER-USER -d "$LAN_CIDR" -j ACCEPT 2>/dev/null || true
+iptables -t nat -A POSTROUTING -s "$LAN_CIDR" ! -d "$LAN_CIDR" -j MASQUERADE
+# QUIC blocking: allow to Russian IPs, block to foreign IPs (forces TCP fallback into proxy)
+while iptables -D FORWARD -p udp --dport 443 -j DROP 2>/dev/null; do :; done
+while iptables -D FORWARD -p udp --dport 443 -m set ! --match-set russian-ips dst -j DROP 2>/dev/null; do :; done
+while iptables -D OUTPUT -p udp --dport 443 ! -s 127.0.0.1 -j DROP 2>/dev/null; do :; done
+while iptables -D OUTPUT -p udp --dport 443 ! -s 127.0.0.1 -m set ! --match-set russian-ips dst -j DROP 2>/dev/null; do :; done
+if proxy_enabled; then
+    iptables -A FORWARD -p udp --dport 443 -m set ! --match-set russian-ips dst -j DROP
+    iptables -A OUTPUT -p udp --dport 443 ! -s 127.0.0.1 -m set ! --match-set russian-ips dst -j DROP
+fi
 
 echo "[fw] Firewall ready"
-echo "       Mode: $PROXY_BACKEND"
-if [ -n "$SOCKS5_PORT" ]; then
-echo "       Host TCP(OUTPUT) → redsocks → ${PROXY_BACKEND}"
-echo "       LAN TCP(PREROUTING) → redsocks → ${PROXY_BACKEND}"
-fi
-echo "       LAN DNS → unbound :53"
-echo "       LAN FORWARD + MASQUERADE enabled for 192.168.1.0/24"
-
-if [ -n "$SOCKS5_PORT" ]; then
-wait $REDSOCKS_PID
-else
-# держим контейнер живым — нет демона для wait
-tail -f /dev/null
-fi
+proxy_enabled && echo "       Balancing: wstunnel(:$REDSOCKS_PORT) = ${WSTUNNEL_BALANCE}% / tor(:$TOR_REDSOCKS_PORT) = ${TOR_BALANCE}%"
+# Бесконечный цикл удержания контейнера
+while true; do
+    sleep 3600
+done
