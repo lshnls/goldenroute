@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>HABR.md</title>
+<meta http-equiv="Content-type" content="text/html;charset=UTF-8">
+
+<style>
+/* https://github.com/microsoft/vscode/blob/master/extensions/markdown-language-features/media/markdown.css */
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+body {
+	font-family: var(--vscode-markdown-font-family, -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", "Ubuntu", "Droid Sans", sans-serif);
+	font-size: var(--vscode-markdown-font-size, 14px);
+	padding: 0 26px;
+	line-height: var(--vscode-markdown-line-height, 22px);
+	word-wrap: break-word;
+}
+
+#code-csp-warning {
+	position: fixed;
+	top: 0;
+	right: 0;
+	color: white;
+	margin: 16px;
+	text-align: center;
+	font-size: 12px;
+	font-family: sans-serif;
+	background-color:#444444;
+	cursor: pointer;
+	padding: 6px;
+	box-shadow: 1px 1px 1px rgba(0,0,0,.25);
+}
+
+#code-csp-warning:hover {
+	text-decoration: none;
+	background-color:#007acc;
+	box-shadow: 2px 2px 2px rgba(0,0,0,.25);
+}
+
+body.scrollBeyondLastLine {
+	margin-bottom: calc(100vh - 22px);
+}
+
+body.showEditorSelection .code-line {
+	position: relative;
+}
+
+body.showEditorSelection .code-active-line:before,
+body.showEditorSelection .code-line:hover:before {
+	content: "";
+	display: block;
+	position: absolute;
+	top: 0;
+	left: -12px;
+	height: 100%;
+}
+
+body.showEditorSelection li.code-active-line:before,
+body.showEditorSelection li.code-line:hover:before {
+	left: -30px;
+}
+
+.vscode-light.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(0, 0, 0, 0.15);
+}
+
+.vscode-light.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(0, 0, 0, 0.40);
+}
+
+.vscode-light.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+.vscode-dark.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(255, 255, 255, 0.4);
+}
+
+.vscode-dark.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(255, 255, 255, 0.60);
+}
+
+.vscode-dark.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+.vscode-high-contrast.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(255, 160, 0, 0.7);
+}
+
+.vscode-high-contrast.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(255, 160, 0, 1);
+}
+
+.vscode-high-contrast.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+img {
+	max-width: 100%;
+	max-height: 100%;
+}
+
+a {
+	text-decoration: none;
+}
+
+a:hover {
+	text-decoration: underline;
+}
+
+a:focus,
+input:focus,
+select:focus,
+textarea:focus {
+	outline: 1px solid -webkit-focus-ring-color;
+	outline-offset: -1px;
+}
+
+hr {
+	border: 0;
+	height: 2px;
+	border-bottom: 2px solid;
+}
+
+h1 {
+	padding-bottom: 0.3em;
+	line-height: 1.2;
+	border-bottom-width: 1px;
+	border-bottom-style: solid;
+}
+
+h1, h2, h3 {
+	font-weight: normal;
+}
+
+table {
+	border-collapse: collapse;
+}
+
+table > thead > tr > th {
+	text-align: left;
+	border-bottom: 1px solid;
+}
+
+table > thead > tr > th,
+table > thead > tr > td,
+table > tbody > tr > th,
+table > tbody > tr > td {
+	padding: 5px 10px;
+}
+
+table > tbody > tr + tr > td {
+	border-top: 1px solid;
+}
+
+blockquote {
+	margin: 0 7px 0 5px;
+	padding: 0 16px 0 10px;
+	border-left-width: 5px;
+	border-left-style: solid;
+}
+
+code {
+	font-family: Menlo, Monaco, Consolas, "Droid Sans Mono", "Courier New", monospace, "Droid Sans Fallback";
+	font-size: 1em;
+	line-height: 1.357em;
+}
+
+body.wordWrap pre {
+	white-space: pre-wrap;
+}
+
+pre:not(.hljs),
+pre.hljs code > div {
+	padding: 16px;
+	border-radius: 3px;
+	overflow: auto;
+}
+
+pre code {
+	color: var(--vscode-editor-foreground);
+	tab-size: 4;
+}
+
+/** Theming */
+
+.vscode-light pre {
+	background-color: rgba(220, 220, 220, 0.4);
+}
+
+.vscode-dark pre {
+	background-color: rgba(10, 10, 10, 0.4);
+}
+
+.vscode-high-contrast pre {
+	background-color: rgb(0, 0, 0);
+}
+
+.vscode-high-contrast h1 {
+	border-color: rgb(0, 0, 0);
+}
+
+.vscode-light table > thead > tr > th {
+	border-color: rgba(0, 0, 0, 0.69);
+}
+
+.vscode-dark table > thead > tr > th {
+	border-color: rgba(255, 255, 255, 0.69);
+}
+
+.vscode-light h1,
+.vscode-light hr,
+.vscode-light table > tbody > tr + tr > td {
+	border-color: rgba(0, 0, 0, 0.18);
+}
+
+.vscode-dark h1,
+.vscode-dark hr,
+.vscode-dark table > tbody > tr + tr > td {
+	border-color: rgba(255, 255, 255, 0.18);
+}
+
+</style>
+
+<style>
+/* Tomorrow Theme */
+/* http://jmblog.github.com/color-themes-for-google-code-highlightjs */
+/* Original theme - https://github.com/chriskempson/tomorrow-theme */
+
+/* Tomorrow Comment */
+.hljs-comment,
+.hljs-quote {
+	color: #8e908c;
+}
+
+/* Tomorrow Red */
+.hljs-variable,
+.hljs-template-variable,
+.hljs-tag,
+.hljs-name,
+.hljs-selector-id,
+.hljs-selector-class,
+.hljs-regexp,
+.hljs-deletion {
+	color: #c82829;
+}
+
+/* Tomorrow Orange */
+.hljs-number,
+.hljs-built_in,
+.hljs-builtin-name,
+.hljs-literal,
+.hljs-type,
+.hljs-params,
+.hljs-meta,
+.hljs-link {
+	color: #f5871f;
+}
+
+/* Tomorrow Yellow */
+.hljs-attribute {
+	color: #eab700;
+}
+
+/* Tomorrow Green */
+.hljs-string,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-addition {
+	color: #718c00;
+}
+
+/* Tomorrow Blue */
+.hljs-title,
+.hljs-section {
+	color: #4271ae;
+}
+
+/* Tomorrow Purple */
+.hljs-keyword,
+.hljs-selector-tag {
+	color: #8959a8;
+}
+
+.hljs {
+	display: block;
+	overflow-x: auto;
+	color: #4d4d4c;
+	padding: 0.5em;
+}
+
+.hljs-emphasis {
+	font-style: italic;
+}
+
+.hljs-strong {
+	font-weight: bold;
+}
+</style>
+
+<style>
+/*
+ * Markdown PDF CSS
+ */
+
+ body {
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", "Ubuntu", "Droid Sans", sans-serif, "Meiryo";
+	padding: 0 12px;
+}
+
+pre {
+	background-color: #f8f8f8;
+	border: 1px solid #cccccc;
+	border-radius: 3px;
+	overflow-x: auto;
+	white-space: pre-wrap;
+	overflow-wrap: break-word;
+}
+
+pre:not(.hljs) {
+	padding: 23px;
+	line-height: 19px;
+}
+
+blockquote {
+	background: rgba(127, 127, 127, 0.1);
+	border-color: rgba(0, 122, 204, 0.5);
+}
+
+.emoji {
+	height: 1.4em;
+}
+
+code {
+	font-size: 14px;
+	line-height: 19px;
+}
+
+/* for inline code */
+:not(pre):not(.hljs) > code {
+	color: #C9AE75; /* Change the old color so it seems less like an error */
+	font-size: inherit;
+}
+
+/* Page Break : use <div class="page"/> or <div class="page"></div> to insert page break
+-------------------------------------------------------- */
+.page {
+	page-break-after: always;
+}
+
+</style>
+
+<script src="https://unpkg.com/mermaid/dist/mermaid.min.js"></script>
+</head>
+<body>
+  <script>
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: document.body.classList.contains('vscode-dark') || document.body.classList.contains('vscode-high-contrast')
+          ? 'dark'
+          : 'default'
+    });
+  </script>
+<h1 id="goldenroute-прозрачный-tor-шлюз-который-вы-заслужили">GOLDENROUTE: Прозрачный Tor-шлюз, который вы заслужили</h1>
+<p><em>Инфраструктурная дисциплина для тех, кто устал настраивать прокси на каждом устройстве</em></p>
+<hr>
+<h2 id="вместо-вступления">ВМЕСТО ВСТУПЛЕНИЯ</h2>
+<p>Вы когда-нибудь задумывались, почему в 2026 году, чтобы зайти на заблокированный сайт, нужно:</p>
+<ol>
+<li>Купить VPS</li>
+<li>Настроить VPN</li>
+<li>Включить VPN на каждом устройстве</li>
+<li>Выключать VPN для российских сервисов</li>
+<li>Повторить для всех членов семьи</li>
+</ol>
+<p>Это не архитектура. Это бардак.</p>
+<p>GOLDENROUTE™ — это одно решение, которое работает на уровне сети. Вы настраиваете его один раз на шлюзе, и всё. LAN-клиенты не знают, что такое прокси. Они просто выходят в интернет. Шлюз решает, что направить в Tor, а что — напрямую.</p>
+<hr>
+<h2 id="проблема-почему-существующие-решения-несостоятельны">ПРОБЛЕМА: ПОЧЕМУ СУЩЕСТВУЮЩИЕ РЕШЕНИЯ НЕСОСТОЯТЕЛЬНЫ</h2>
+<h3 id="вариант-1-vpn-на-каждом-устройстве">Вариант 1: VPN на каждом устройстве</h3>
+<p>Работает ровно до тех пор, пока:</p>
+<ul>
+<li>Не закончится место на телефоне от 5 (пяти) VPN-приложений</li>
+<li>Член семьи не спросит: «А почему у меня Яндекс не открывается?»</li>
+<li>Ребёнок не найдёт способ отключить VPN</li>
+</ul>
+<h3 id="вариант-2-роутер-с-openwrt--vpn">Вариант 2: Роутер с OpenWrt + VPN</h3>
+<p>Требует:</p>
+<ul>
+<li>Поддержки роутера</li>
+<li>Прошивки</li>
+<li>Настройки</li>
+<li>Перепрошивки после неудачной настройки</li>
+<li>Покупки нового роутера после того, как старый превратился в кирпич</li>
+</ul>
+<h3 id="вариант-3-docker-контейнер-с-прокси">Вариант 3: Docker-контейнер с прокси</h3>
+<p>Почти то, что нужно. Почти. Но каждый раз, когда вы пытаетесь объяснить жене, как настроить DNS на ноутбуке, вы понимаете: что-то пошло не так.</p>
+<hr>
+<h2 id="решение-goldenroute">РЕШЕНИЕ: GOLDENROUTE™</h2>
+<p>GOLDENROUTE™ — это 3 (три) Docker-контейнера, которые превращают любой Linux-хост в прозрачный шлюз для обхода блокировок.</p>
+<p><strong>Что он делает:</strong></p>
+<ol>
+<li>Перехватывает весь TCP-трафик с LAN и хоста</li>
+<li>Проверяет destination: российский? → пропускает напрямую. В списке исключений? → пропускает напрямую. Всё остальное? → в Tor.</li>
+<li>Перехватывает все DNS-запросы и направляет их через DoT (DNS-over-TLS)</li>
+</ol>
+<p><strong>Что он НЕ делает:</strong></p>
+<ul>
+<li>Не анонимизирует (Tor здесь — средство обхода блокировок, не более)</li>
+<li>Не требует настройки на каждом устройстве</li>
+<li>Не требует VPN-клиентов</li>
+<li>Не требует покупки VPS</li>
+</ul>
+<hr>
+<h2 id="как-это-работает-без-аскетичных-ascii-схем">КАК ЭТО РАБОТАЕТ (БЕЗ АСКЕТИЧНЫХ ASCII-СХЕМ)</h2>
+<p>Система принимает 3 (три) решения о каждом пакете:</p>
+<ol>
+<li><strong>Destination в <code>russian-ips</code></strong> → RETURN. Трафик идёт напрямую. Российские адреса не требуют посредников. Список диапазонов загружается с RIPE API и автоматически обновляется.</li>
+<li><strong>Destination в <code>tor-exclude</code></strong> → RETURN. Ваш персональный список исключений. Вы сами решаете, что не должно касаться Tor.</li>
+<li><strong>Всё остальное</strong> → REDIRECT → Tor. Без обсуждений.</li>
+</ol>
+<h3 id="цепочки-iptables">Цепочки iptables</h3>
+<p>Их 3 (три). И каждая делает ровно то, для чего предназначена.</p>
+<p><strong>1. FW_REDIRECT (PREROUTING)</strong></p>
+<p>Встречает трафик от LAN-клиентов. Порядок проверки критичен — нарушение фатально:</p>
+<pre class="hljs"><code><div>dst-type LOCAL        → RETURN   # пакеты самому хосту
+src 172.16.0.0/12     → RETURN   # Docker bridge (анти-петля)
+10/8, 172.16/12,      → RETURN   # приватные диапазоны
+192.168/16
+russian-ips           → RETURN   # домашняя территория
+tor-exclude           → RETURN   # ваши исключения
+dport 12346/9050      → RETURN   # не перехватывать свой трафик
+dport 53              → REDIRECT # DNS → unbound
+всё остальное TCP     → REDIRECT # → :12346 → Tor
+</div></code></pre>
+<p><strong>2. FW_OUTPUT (OUTPUT)</strong></p>
+<p>Абсолютно та же логика для трафика, рождённого на хосте. Хост не является исключением.</p>
+<p><strong>3. DOCKER-USER (FORWARD)</strong></p>
+<p>Разрешает транзитный трафик из LAN и MASQUERADE для SNAT.</p>
+<hr>
+<h2 id="quic--протокол-который-думает-что-он-выше-tcp">QUIC — ПРОТОКОЛ, КОТОРЫЙ ДУМАЕТ, ЧТО ОН ВЫШЕ TCP</h2>
+<p>QUIC (UDP/443) — протокол, который браузеры предпочитают TCP при любой возможности.</p>
+<p>Прокси-серверы не поддерживают перехват UDP. Если QUIC не заблокировать, браузер устанавливает прямое соединение с иностранным сервером, минуя Tor. Весь смысл системы теряется.</p>
+<p>Решение — блокировка QUIC для всего, что не в <code>russian-ips</code> и не в <code>tor-exclude</code>:</p>
+<pre class="hljs"><code><div>FORWARD: UDP/443 !russian-ips !tor-exclude → DROP
+OUTPUT:  UDP/443 !127.0.0.1 !russian-ips !tor-exclude → DROP
+</div></code></pre>
+<p>Браузер, не получив ответа по UDP, откатывается на TCP/443. TCP/443 перехватывается правилами PREROUTING/OUTPUT и направляется в Tor.</p>
+<p>QUIC к российским сайтам и к адресам из вашего списка исключений работает штатно — без задержек, без потери производительности.</p>
+<hr>
+<h2 id="компоненты">КОМПОНЕНТЫ</h2>
+<h3 id="fw-firewall">fw (Firewall)</h3>
+<p>Центральный компонент. <code>network_mode: host</code>, права <code>NET_ADMIN</code> + <code>NET_RAW</code>. Управляет iptables на хосте напрямую.</p>
+<p>При старте:</p>
+<ol>
+<li>Очищает старые цепочки через while-цикл (идемпотентность — обязательное требование)</li>
+<li>Загружает ipset <code>russian-ips</code> из файла + фоновое обновление с RIPE (4 попытки)</li>
+<li>Загружает ipset <code>tor-exclude</code> из файла</li>
+<li>Запускает redsocks на порту 12346, апстрим — Tor SOCKS5 :9050</li>
+<li>Применяет правила к OUTPUT и PREROUTING</li>
+<li>Блокирует QUIC для не-российских и не-исключённых адресов</li>
+</ol>
+<p>При остановке: trap cleanup убивает redsocks и убирает за собой.</p>
+<h3 id="tor">tor</h3>
+<p>Единственный бэкенд. SOCKS5 на порту 9050. Мосты obfs4 для обхода блокировок. Никакой балансировки, никаких альтернатив.</p>
+<h3 id="unbound">unbound</h3>
+<p>DNS-over-TLS форвардер. Все DNS-запросы с LAN и хоста перехватываются на порту 53 и направляются сюда. <code>.ru</code> — через Яндекс DNS (DoT), всё остальное — через Cloudflare и Google (DoT).</p>
+<hr>
+<h2 id="один-день-из-жизни-пользователя-goldenroute">ОДИН ДЕНЬ ИЗ ЖИЗНИ ПОЛЬЗОВАТЕЛЯ GOLDENROUTE™</h2>
+<p><strong>Утро.</strong> Вы открываете ноутбук. Он подключается к Wi-Fi. Вы получаете IP по DHCP. Шлюз по умолчанию — хост с GOLDENROUTE™. DNS — хост с GOLDENROUTE™. Вы открываете Яндекс — он открывается напрямую, без Tor. Быстро.</p>
+<p><strong>День.</strong> Вы открываете заблокированный сайт. Браузер сначала пробует QUIC (UDP/443) — пакет тихо дропается. Браузер откатывается на TCP/443. Пакет попадает в PREROUTING, destination не российский, не в исключениях. REDIRECT :12346. redsocks → Tor. Сайт открывается.</p>
+<p><strong>Вечер.</strong> Ребёнок открывает YouTube на планшете. Никаких настроек. Никаких вопросов. Просто работает.</p>
+<hr>
+<h2 id="быстрый-старт">БЫСТРЫЙ СТАРТ</h2>
+<pre class="hljs"><code><div><span class="hljs-comment"># 1. Клонировать</span>
+git <span class="hljs-built_in">clone</span> https://github.com/lshnls/goldenroute.git
+<span class="hljs-built_in">cd</span> goldenroute
+<span class="hljs-built_in">cp</span> .env.example .<span class="hljs-built_in">env</span>
+
+<span class="hljs-comment"># 2. Получить свежие мосты Tor</span>
+<span class="hljs-comment">#    https://bridges.torproject.org → tor/bridges.txt</span>
+
+<span class="hljs-comment"># 3. Добавить исключения (опционально)</span>
+<span class="hljs-comment">#    fw/tor-exclude-ips.txt</span>
+
+<span class="hljs-comment"># 4. Запустить</span>
+docker compose up -d
+</div></code></pre>
+<p>Настройка клиентов: указать IP хоста как шлюз по умолчанию и DNS-сервер. Всё.</p>
+<hr>
+<h2 id="конфигурация">КОНФИГУРАЦИЯ</h2>
+<p><code>env</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Переменная</th>
+<th>По умолчанию</th>
+<th>Описание</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>UNBOUND_PORT</code></td>
+<td>53</td>
+<td>Порт DNS</td>
+</tr>
+<tr>
+<td><code>TOR_SOCKS_PORT</code></td>
+<td>9050</td>
+<td>SOCKS5 порт Tor</td>
+</tr>
+<tr>
+<td><code>TOR_CONTROL_PORT</code></td>
+<td>9051</td>
+<td>Control-порт Tor</td>
+</tr>
+<tr>
+<td><code>TOR_REDSOCKS_PORT</code></td>
+<td>12346</td>
+<td>Порт redsocks</td>
+</tr>
+<tr>
+<td><code>LAN_CIDR</code></td>
+<td>192.168.1.0/24</td>
+<td>Подсеть LAN</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="диагностика">ДИАГНОСТИКА</h2>
+<p><strong>Tor не забутстрапился:</strong></p>
+<pre class="hljs"><code><div>docker compose logs tor | grep <span class="hljs-string">&quot;Bootstrapped&quot;</span>
+</div></code></pre>
+<p>Ожидается <code>Bootstrapped 100% (done)</code>. Если нет — обновить мосты на https://bridges.torproject.org.</p>
+<p><strong>Трафик не идёт через Tor:</strong></p>
+<pre class="hljs"><code><div>docker compose <span class="hljs-built_in">exec</span> fw iptables -t nat -L FW_REDIRECT -n -v
+</div></code></pre>
+<p>Счётчик <code>REDIRECT tcp --dport 12346</code> должен расти.</p>
+<p><strong>QUIC не блокируется:</strong></p>
+<pre class="hljs"><code><div>docker compose <span class="hljs-built_in">exec</span> fw iptables -L FORWARD -n -v | grep <span class="hljs-string">&quot;udp dpt:443&quot;</span>
+</div></code></pre>
+<p>Счётчик DROP должен расти на иностранных сайтах.</p>
+<p><strong>Мосты заблокированы:</strong></p>
+<pre class="hljs"><code><div>docker compose up -d --force-recreate tor
+</div></code></pre>
+<hr>
+<h2 id="ограничения-честность--лучшая-политика">ОГРАНИЧЕНИЯ (ЧЕСТНОСТЬ — ЛУЧШАЯ ПОЛИТИКА)</h2>
+<ul>
+<li>Только TCP уходит через Tor. UDP (кроме DNS и заблокированного QUIC) — напрямую.</li>
+<li>Snowflake не работает через Docker NAT. Только obfs4-мосты.</li>
+<li><code>network_mode: host</code> обязателен для fw.</li>
+<li>Только IPv4.</li>
+</ul>
+<hr>
+<h2 id="почему-не-wstunnel-почему-не-балансировка">ПОЧЕМУ НЕ WSTUNNEL? ПОЧЕМУ НЕ БАЛАНСИРОВКА?</h2>
+<p>В предыдущей версии проекта было 2 (два) бэкенда: wstunnel (WebSocket-туннель до вышестоящего SOCKS5-прокси) и Tor. Между ними — вероятностная балансировка 70/30.</p>
+<p>Практика показала: балансировка между платным прокси и Tor — это компромисс, который не нужен никому. Tor справляется с обходом блокировок. Если вам нужна производительность — используйте Tor с правильными мостами. Если вам нужна анонимность — используйте Tor. Два бэкенда — это не гибкость. Это лишняя сложность.</p>
+<p>GOLDENROUTE™ — это один бэкенд. Одно направление. Tor.</p>
+<hr>
+<h2 id="заключение">ЗАКЛЮЧЕНИЕ</h2>
+<p>GOLDENROUTE™ — это не прокси. Это инфраструктурная дисциплина.</p>
+<p>Система, которую вы настраиваете один раз. Которая не требует объяснений членам семьи. Которая работает на уровне сети, потому что только так и должен работать шлюз.</p>
+<p>Никаких VPN-клиентов. Никаких настроек на каждом устройстве. Никаких вопросов «а почему у меня не открывается».</p>
+<p>Один хост. Три контейнера. Tor.</p>
+<hr>
+
+</body>
+</html>
