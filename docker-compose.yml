@@ -1,74 +1,33 @@
-# version: '3.8'
-
-x-proxy-env: &proxy-env
-  environment:
-    LL_IPV4_ADDR: "${LL_IPV4_ADDR:-127.0.0.1}"
-    LLP_SOCKS5_PROXY: "${LLP_SOCKS5_PROXY:-41080}"
-    LLP_HTTP_PROXY: "${LLP_HTTP_PROXY:-43128}"
-
-
-# LL_IPV4_ADDR="127.0.0.1"
-# IP-адрес хоста с прокси (по умолчанию 127.0.0.1)
-# если 0,0.0.0 то НЕОБХОДИМА установка параметра PAC_PROXY_HOST !
-# LLP_SOCKS5_PROXY="31080"
-# порт SOCKS5 (по умолчанию 31080)
-# LLP_HTTP_PROXY="33128"
-# порт HTTP-прокси (по умолчанию 33128)
-# если 0,0,0,0 то необходимы
-#
+# ══════════════════════════════════════════════════════════════════
+#  GOLDENROUTE™ FW'26 — коллекция сокращена до необходимого.
+#  wstunnel и nginx сняты с показа. Остался только Tor — и это осознанный выбор.
+# ══════════════════════════════════════════════════════════════════
 
 services:
-  wstunnel:
-    image: ghcr.io/erebe/wstunnel:latest
-    restart: unless-stopped
-    <<: *proxy-env 
-    command: >
-      /home/app/wstunnel client
-      --local-to-remote socks5://0.0.0.0:1080
-      --local-to-remote http://0.0.0.0:3128
-      ws://nginx:80
-    ports:
-      - "${LL_IPV4_ADDR}:${LLP_SOCKS5_PROXY}:1080"
-      - "${LL_IPV4_ADDR}:${LLP_HTTP_PROXY}:3128"
   fw:
     build:
       context: ./fw
       dockerfile: Dockerfile
-    network_mode: host
+    network_mode: host                 # без посредников — иначе правила не работают
     cap_add:
       - NET_ADMIN
       - NET_RAW
     restart: unless-stopped
     depends_on:
       - unbound
+      - tor
     volumes:
       - ./fw/russian-ips.txt:/etc/goldenroute/russian-ips.txt
-      - ./fw/tor-only-ips.txt:/etc/goldenroute/tor-only-ips.txt:ro
+      - ./fw/tor-exclude-ips.txt:/etc/goldenroute/tor-exclude-ips.txt:ro
     environment:
-#      - PROXY_BACKEND=${PROXY_BACKEND:-wstunnel} # obsolete
-      - TOR_BALANCE=${TOR_BALANCE:-50}
-      - WSTUNNEL_BALANCE=${WSTUNNEL_BALANCE:-50}
-      - LLP_SOCKS5_PROXY=${LLP_SOCKS5_PROXY:-41080}
-      - LLP_HTTP_PROXY=${LLP_HTTP_PROXY:-43128}
       - TOR_SOCKS_PORT=${TOR_SOCKS_PORT:-9050}
-  nginx:
-    image: docker.io/nginx:alpine
-    # container_name: nginx-pac
-    restart: unless-stopped
-    volumes:
-      - ./nginx/entrypoint.sh:/entrypoint.sh:ro
-      - ./nginx/backends.list:/etc/nginx/backends.list:ro
-    entrypoint: |
-      sh -c "
-        cp /entrypoint.sh /tmp/ &&
-        chmod +x /tmp/entrypoint.sh &&
-        /tmp/entrypoint.sh 
-        "
+      - TOR_REDSOCKS_PORT=${TOR_REDSOCKS_PORT:-12346}
+      - LAN_CIDR=${LAN_CIDR:-192.168.1.0/24}
+
   unbound:
     build:
       context: ./unbound
       dockerfile: Dockerfile
-    #container_name: unbound
     restart: unless-stopped
     ports:
       - "$UNBOUND_PORT:53/tcp"
@@ -76,13 +35,11 @@ services:
     volumes:
       - ./unbound/unbound.conf:/etc/unbound/unbound.conf
       - unbound_data:/var/lib/unbound
-    command: unbound -d -c /etc/unbound/unbound.conf
-  
+
   tor:
     build:
       context: ./tor
       dockerfile: Dockerfile
-    #container_name: home_proxy-tor
     restart: unless-stopped
     ports:
       - $TOR_SOCKS_PORT:9050/tcp
