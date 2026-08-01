@@ -4,8 +4,9 @@
 Classifies a target IP/domain against fw IP lists (order matches fw/entrypoint.sh):
   private → tor-only → russian-only → russian → load-balance (FW_LB).
 
-Tor/WSProxy/Direct columns show connection counts from iptables (with --real-load),
-never percentages or .env values. Without --real-load those columns are n/a.
+Tor/WSProxy/Direct columns show successful end-to-end connection counts
+(with --real-load: TLS handshake on :443, not bare TCP to redsocks).
+Without --real-load those columns are n/a.
 
 Examples:
   sudo python3 scripts/route_diagram.py --domain nn.ru --real-load
@@ -21,6 +22,7 @@ import ipaddress
 import os
 import re
 import socket
+import ssl
 import subprocess
 import sys
 import time
@@ -31,9 +33,11 @@ DEFAULT_FILES = {
     "tor_only": "fw/tor-only-ips.txt",
     "russian": "fw/russian-ips.txt",
 }
-DEFAULT_CONNECTIONS = 100
-DEFAULT_CONNECTION_TIMEOUT_SECONDS = 1.0
-DEFAULT_CONNECTION_WAIT_SECONDS = 0.01
+DEFAULT_CONNECTIONS = 10
+# TLS/connect timeout per probe (needs headroom for Tor/wstunnel; 1s is too short).
+DEFAULT_CONNECTION_TIMEOUT_SECONDS = 5.0
+# Pause between probes (rate limiting / avoid hammering).
+DEFAULT_CONNECTION_WAIT_SECONDS = 0
 DEFAULT_TARGETS_FILE = "scripts/route_diagram.txt"
 ROUTE_TOR_ONLY = "tor (tor-only-ips.txt)"
 ROUTE_RUSSIAN_ONLY = "direct (russian-only-ips.txt)"
@@ -42,6 +46,26 @@ ROUTE_PRIVATE = "direct (private)"
 ROUTE_LB = "load-balance (wstunnel/tor)"
 ROUTE_MIXED = "mixed"
 EMPTY_BALANCE = {"TOR_BALANCE": None, "WSTUNNEL_BALANCE": None}
+
+
+def _progress(message: str, *, same_line: bool = False) -> None:
+    """Progress to stderr so stdout stays clean for the final report."""
+    if same_line:
+        sys.stderr.write(f"\r{message}")
+        sys.stderr.flush()
+    else:
+        print(message, file=sys.stderr, flush=True)
+
+
+def _format_eta(seconds: float) -> str:
+    seconds = max(0, int(round(seconds)))
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, secs = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m{secs:02d}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h{minutes:02d}m"
 
 
 class RouteAnalyzer:
@@ -143,61 +167,155 @@ class RouteAnalyzer:
                         counters["tor"] += pkts
         return counters
 
-    def _generate_tcp_connections(self, targets: list[str], port: int, count: int) -> dict[str, int]:
-        stats = {"attempted": 0, "connected": 0, "failed": 0}
+    def _probe_end_to_end(self, host: str, port: int, server_hostname: str | None = None) -> bool:
+        """True only if the connection works past local REDIRECT/redsocks.
+
+        TCP accept by redsocks is not enough: when Tor/wstunnel is down, create_connection
+        still succeeds locally. Require a TLS handshake (port 443) or a short I/O probe.
+
+        server_hostname: SNI/Host for TLS when connecting by IP (must be the real domain).
+        """
+        sock: socket.socket | None = None
+        sni = server_hostname or host
+        try:
+            sock = socket.create_connection((host, port), timeout=DEFAULT_CONNECTION_TIMEOUT_SECONDS)
+            sock.settimeout(DEFAULT_CONNECTION_TIMEOUT_SECONDS)
+            if port == 443:
+                ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+                ssock = ctx.wrap_socket(sock, server_hostname=sni)
+                sock = None  # ownership transferred
+                try:
+                    ssock.do_handshake()
+                finally:
+                    ssock.close()
+                return True
+
+            # Non-TLS: force upstream activity; failed SOCKS usually resets soon after accept.
+            try:
+                sock.sendall(b"\r\n")
+                sock.recv(64)
+            except socket.timeout:
+                # Still open after timeout — treat as usable enough for this probe.
+                return True
+            return True
+        except OSError:
+            return False
+        finally:
+            if sock is not None:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+
+    def _attribute_lb_hit(self, before: dict[str, object], after: dict[str, object]) -> str:
+        """Which FW_LB backend absorbed this probe (best-effort if concurrent traffic)."""
+        tor_delta = max(int(after["tor"]) - int(before["tor"]), 0)
+        ws_delta = max(int(after["wsproxy"]) - int(before["wsproxy"]), 0)
+        if tor_delta > ws_delta:
+            return "tor"
+        if ws_delta > tor_delta:
+            return "wsproxy"
+        if tor_delta > 0:
+            return "tor"
+        return "wsproxy"
+
+    def _generate_tcp_connections(
+        self,
+        targets: list[str],
+        port: int,
+        count: int,
+        progress_label: str = "",
+        counter_mode: str | None = None,
+        server_hostname: str | None = None,
+    ) -> dict[str, int]:
+        stats = {
+            "attempted": 0,
+            "connected": 0,
+            "failed": 0,
+            "direct": 0,
+            "tor": 0,
+            "wsproxy": 0,
+        }
         if not targets:
             return stats
+
+        label = progress_label or targets[0]
+        sni = server_hostname or self.target_domain
+        started = time.monotonic()
         for index in range(count):
             target = targets[index % len(targets)]
-            try:
-                with socket.create_connection((target, port), timeout=DEFAULT_CONNECTION_TIMEOUT_SECONDS):
-                    stats["connected"] += 1
-            except OSError:
+            before = None
+            if counter_mode == "lb":
+                before = self._collect_iptables_counters(mode="lb")
+                if before.get("error"):
+                    before = None
+
+            ok = self._probe_end_to_end(target, port, server_hostname=sni)
+            if ok:
+                stats["connected"] += 1
+                if counter_mode == "tor_only":
+                    stats["tor"] += 1
+                elif counter_mode == "lb":
+                    if before is not None and not before.get("error"):
+                        after = self._collect_iptables_counters(mode="lb")
+                        if after.get("error"):
+                            stats["wsproxy"] += 1
+                        else:
+                            stats[self._attribute_lb_hit(before, after)] += 1
+                    else:
+                        stats["wsproxy"] += 1
+                else:
+                    stats["direct"] += 1
+            else:
                 stats["failed"] += 1
-            finally:
-                stats["attempted"] += 1
-                time.sleep(DEFAULT_CONNECTION_WAIT_SECONDS)
+            stats["attempted"] += 1
+
+            done = index + 1
+            elapsed = time.monotonic() - started
+            remaining = count - done
+            eta = (elapsed / done) * remaining if done else 0
+            _progress(
+                f"  [{label}] probe {done}/{count} "
+                f"ok={stats['connected']} fail={stats['failed']} "
+                f"ETA {_format_eta(eta)}   ",
+                same_line=True,
+            )
+            time.sleep(DEFAULT_CONNECTION_WAIT_SECONDS)
+
+        sys.stderr.write("\n")
+        sys.stderr.flush()
         return stats
 
-    def _measure_deltas(self, mode: str, targets: list[str], port: int, count: int) -> dict[str, object]:
-        before = self._collect_iptables_counters(mode=mode)
-        if before.get("error"):
-            return {
-                "mode": "real-load-unavailable",
-                "balance": dict(EMPTY_BALANCE),
-                "sample": {"attempted": 0, "connected": 0, "failed": 0},
-                "error": str(before["error"]),
-                "sampled_ips": targets,
-                "deltas": {"tor": 0, "wsproxy": 0},
-                "counter_mode": mode,
-            }
+    def _measure_deltas(
+        self,
+        mode: str,
+        targets: list[str],
+        port: int,
+        count: int,
+        progress_label: str = "",
+    ) -> dict[str, object]:
+        sample = self._generate_tcp_connections(
+            targets,
+            port,
+            count,
+            progress_label=progress_label or ",".join(targets[:3]),
+            counter_mode=mode,
+            server_hostname=self.target_domain,
+        )
 
-        sample = self._generate_tcp_connections(targets, port, count)
-        time.sleep(0.2)
-        after = self._collect_iptables_counters(mode=mode)
-
-        if after.get("error"):
-            return {
-                "mode": "real-load-unavailable",
-                "balance": dict(EMPTY_BALANCE),
-                "sample": sample,
-                "error": str(after["error"]),
-                "sampled_ips": targets,
-                "deltas": {"tor": 0, "wsproxy": 0},
-                "counter_mode": mode,
-            }
-
-        tor_delta = max(int(after["tor"]) - int(before["tor"]), 0)
-        wsproxy_delta = max(int(after["wsproxy"]) - int(before["wsproxy"]), 0)
-        total = tor_delta + wsproxy_delta
-
+        # Prefer per-probe attribution; keep iptables batch deltas as diagnostics.
+        tor_hits = int(sample.get("tor", 0))
+        ws_hits = int(sample.get("wsproxy", 0))
+        total = tor_hits + ws_hits
         if total == 0:
             distribution = dict(EMPTY_BALANCE)
-            result_mode = "real-load-no-hits"
+            result_mode = "real-load-no-hits" if sample["connected"] == 0 else "real-load"
         else:
             distribution = {
-                "TOR_BALANCE": int(round((tor_delta / total) * 100)),
-                "WSTUNNEL_BALANCE": int(round((wsproxy_delta / total) * 100)),
+                "TOR_BALANCE": int(round((tor_hits / total) * 100)),
+                "WSTUNNEL_BALANCE": int(round((ws_hits / total) * 100)),
             }
             result_mode = "real-load"
 
@@ -206,11 +324,17 @@ class RouteAnalyzer:
             "balance": distribution,
             "sample": sample,
             "sampled_ips": targets,
-            "deltas": {"tor": tor_delta, "wsproxy": wsproxy_delta},
+            "deltas": {"tor": tor_hits, "wsproxy": ws_hits},
             "counter_mode": mode,
         }
 
-    def _read_real_distribution(self, targets: list[str], port: int, count: int) -> dict[str, object]:
+    def _read_real_distribution(
+        self,
+        targets: list[str],
+        port: int,
+        count: int,
+        progress_label: str = "",
+    ) -> dict[str, object]:
         """Measure proxy split from iptables counters for the matching path.
 
         - load-balance IPs → FW_LB (:12345 / :12346)
@@ -223,21 +347,29 @@ class RouteAnalyzer:
 
         lb_targets = by_route.get(ROUTE_LB, [])
         tor_targets = by_route.get(ROUTE_TOR_ONLY, [])
+        label = progress_label or (self.target_domain or self.target_ip or targets[0])
 
         # Prefer LB measurement when any LB IP is present; else tor-only counters.
         if lb_targets:
-            result = self._measure_deltas("lb", lb_targets, port, count)
+            result = self._measure_deltas("lb", lb_targets, port, count, progress_label=label)
             result["lb_targets_only"] = True
             return result
 
         if tor_targets:
-            result = self._measure_deltas("tor_only", tor_targets, port, count)
+            result = self._measure_deltas("tor_only", tor_targets, port, count, progress_label=label)
             result["lb_targets_only"] = False
             return result
 
         # Direct / private — generate traffic for connectivity stats, but no proxy %.
         sample_targets = targets
-        sample = self._generate_tcp_connections(sample_targets, port, count)
+        sample = self._generate_tcp_connections(
+            sample_targets,
+            port,
+            count,
+            progress_label=label,
+            counter_mode=None,
+            server_hostname=self.target_domain,
+        )
         return {
             "mode": "real-load-no-hits",
             "balance": dict(EMPTY_BALANCE),
@@ -307,13 +439,20 @@ class RouteAnalyzer:
             return ips or [self.target_domain]
         raise ValueError("Provide either --ip or --domain")
 
-    def analyze(self, real_load: bool = False, connections: int = DEFAULT_CONNECTIONS, port: int = 443):
+    def analyze(
+        self,
+        real_load: bool = False,
+        connections: int = DEFAULT_CONNECTIONS,
+        port: int = 443,
+        progress_label: str = "",
+    ):
         targets = self.resolve_targets()
         routes_by_ip = {ip: self.classify_ip(ip) for ip in targets}
         unique_routes = sorted(set(routes_by_ip.values()))
         route = unique_routes[0] if len(unique_routes) == 1 else ROUTE_MIXED
 
         primary_ip = targets[0]
+        label = progress_label or (self.target_domain or self.target_ip or primary_ip)
         result = {
             "ip": primary_ip,
             "targets": targets,
@@ -327,7 +466,10 @@ class RouteAnalyzer:
         }
 
         if real_load:
-            load_info = self._read_real_distribution(targets, port=port, count=connections)
+            _progress(f"→ {label}: route={route}, probing {connections} connections…")
+            load_info = self._read_real_distribution(
+                targets, port=port, count=connections, progress_label=label
+            )
             result["balance"] = load_info["balance"]
             result["load_info"] = load_info
         else:
@@ -387,35 +529,28 @@ class RouteAnalyzer:
 
     @staticmethod
     def path_connection_counts(result: dict) -> dict[str, int | None]:
-        """Connection counts per path from iptables deltas / sample (not percentages)."""
+        """Successful end-to-end connection counts per path (from per-probe attribution)."""
         load_info = result.get("load_info") or {}
         mode = load_info.get("mode")
         if mode not in {"real-load", "real-load-no-hits"}:
             return {"direct": None, "tor": None, "wsproxy": None}
 
         sample = load_info.get("sample") or {}
-        deltas = load_info.get("deltas") or {}
+        # Prefer counters collected during probes (direct/tor/wsproxy keys).
+        if all(key in sample for key in ("direct", "tor", "wsproxy")):
+            return {
+                "direct": int(sample.get("direct", 0) or 0),
+                "tor": int(sample.get("tor", 0) or 0),
+                "wsproxy": int(sample.get("wsproxy", 0) or 0),
+            }
+
         connected = int(sample.get("connected", 0) or 0)
-        tor = int(deltas.get("tor", 0) or 0)
-        wsproxy = int(deltas.get("wsproxy", 0) or 0)
         counter_mode = load_info.get("counter_mode")
-        route = result.get("route", "")
-
-        if counter_mode == "none" or (
-            isinstance(route, str) and route.startswith("direct") and counter_mode != "lb"
-        ):
-            return {"direct": connected, "tor": 0, "wsproxy": 0}
-
         if counter_mode == "tor_only":
-            return {"direct": 0, "tor": tor if tor else connected, "wsproxy": 0}
-
+            return {"direct": 0, "tor": connected, "wsproxy": 0}
         if counter_mode == "lb":
-            return {"direct": 0, "tor": tor, "wsproxy": wsproxy}
-
-        # mixed / unknown — attribute iptables hits to proxy, remainder to direct
-        attributed = tor + wsproxy
-        direct = max(connected - attributed, 0)
-        return {"direct": direct, "tor": tor, "wsproxy": wsproxy}
+            return {"direct": 0, "tor": 0, "wsproxy": connected}
+        return {"direct": connected, "tor": 0, "wsproxy": 0}
 
     @staticmethod
     def format_table(rows: list[dict]) -> str:
@@ -568,7 +703,13 @@ Examples:
         if args.ip and args.domain:
             parser.error("Provide either --ip or --domain, not both")
         analyzer = RouteAnalyzer(target_ip=args.ip, target_domain=args.domain)
-        result = analyzer.analyze(real_load=args.real_load, connections=args.connections, port=args.port)
+        label = args.domain or args.ip or ""
+        result = analyzer.analyze(
+            real_load=args.real_load,
+            connections=args.connections,
+            port=args.port,
+            progress_label=label,
+        )
 
         print("Route result:")
         print(f"  IP: {result['ip']}")
@@ -623,13 +764,35 @@ Examples:
         parser.error(f"No targets found in {args.targets_file}")
 
     rows = []
-    for target in targets:
+    total_targets = len(targets)
+    batch_started = time.monotonic()
+    if args.real_load:
+        _progress(
+            f"Batch: {total_targets} targets × {args.connections} probes "
+            f"(timeout {DEFAULT_CONNECTION_TIMEOUT_SECONDS:g}s each)"
+        )
+
+    for target_index, target in enumerate(targets, start=1):
         try:
             if re.fullmatch(r"\d+(?:\.\d+){3}", target):
                 analyzer = RouteAnalyzer(target_ip=target)
             else:
                 analyzer = RouteAnalyzer(target_domain=target)
-            result = analyzer.analyze(real_load=args.real_load, connections=args.connections, port=args.port)
+
+            elapsed = time.monotonic() - batch_started
+            done_before = target_index - 1
+            batch_eta = (elapsed / done_before) * (total_targets - done_before) if done_before else 0
+            _progress(
+                f"[{target_index}/{total_targets}] {target}"
+                + (f"  (batch ETA {_format_eta(batch_eta)})" if args.real_load and done_before else "")
+            )
+
+            result = analyzer.analyze(
+                real_load=args.real_load,
+                connections=args.connections,
+                port=args.port,
+                progress_label=target,
+            )
             sample = result["load_info"].get("sample", {}) if result["load_info"].get("mode") in {
                 "real-load",
                 "real-load-no-hits",
@@ -645,6 +808,11 @@ Examples:
                 "tor": "n/a" if counts["tor"] is None else counts["tor"],
                 "wsproxy": "n/a" if counts["wsproxy"] is None else counts["wsproxy"],
             })
+            if args.real_load:
+                _progress(
+                    f"  ✓ {target}: ok={sample.get('connected', 0)} "
+                    f"fail={sample.get('failed', 0)} route={result['route']}"
+                )
         except (socket.gaierror, ValueError) as exc:
             rows.append({
                 "target": target,
@@ -657,6 +825,9 @@ Examples:
                 "wsproxy": "n/a",
             })
             print(f"Skipping {target}: {exc}", file=sys.stderr)
+
+    if args.real_load:
+        _progress(f"Done in {_format_eta(time.monotonic() - batch_started)}")
 
     print("Route test summary:")
     print(RouteAnalyzer.format_table(rows))
