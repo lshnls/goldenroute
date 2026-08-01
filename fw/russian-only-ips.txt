@@ -24,3 +24,10 @@
 104.17.0.0/16
 104.18.0.0/16
 104.19.0.0/16
+
+# GitHub service endpoints
+# Common hosts: github.com, api.github.com, codeload.github.com
+# Use ranges that are commonly served by GitHub's CDN / edge infrastructure.
+192.30.255.0/24
+185.199.108.0/22
+140.82.112.0/20
