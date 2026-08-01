@@ -1,93 +1,186 @@
-# GOLDENROUTE — INFRASTRUCTURE DIVISION
+# goldenroute — transparent proxy для обхода блокировок
 
-Прозрачный прокси-шлюз для обхода блокировок. Единственный бэкенд — Tor.
+## Назначение
 
----
-
-## НАЗНАЧЕНИЕ
-
-Система принимает 1 (одно) решение о каждом пакете:
-
-- **Destination в `russian-ips`** (данные RIPE) → напрямую
-- **Destination в `tor-exclude`** (ваш список) → напрямую
-- **Всё остальное** → Tor
+Маршрутизация трафика с LAN и локального хоста в зависимости от страны назначения:
+- **Российские IP** → напрямую
+- **Иностранные IP** → WebSocket-туннель (wstunnel) → вышестоящий SOCKS5-прокси
+- **DNS** → шифрованные DoT-запросы через unbound; для `.ru` через Яндекс DNS
 
 Только обход блокировок, без анонимности.
 
----
-
-## АРХИТЕКТУРА
+## Архитектура
 
 ```
-LAN-клиенты → FW (PREROUTING) → REDIRECT :12346 → redsocks → Tor → интернет
-                                                  ↓
-                                           unbound (DoT :53)
+┌──────────────┐    DNS :53    ┌──────────┐    DoT (853)
+│   Клиенты    │ ────────────→ │  unbound  │ ─────────→ Cloudflare/Google/Yandex
+│ 192.168.1.0/24│              └──────────┘
+└──────┬───────┘
+       │ шлюз по умолчанию: 192.168.1.10
+       ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                          хост (192.168.1.10)                    │
+│                                                                 │
+│  ┌──────────────────┐    TCP     ┌──────────────────┐           │
+│  │  iptables (fw)   │ ─────────→ │    redsocks      │           │
+│  │  OUTPUT/PREROUTING│            │   :12345 → socks5│           │
+│  │  + FORWARD        │            │   :41080         │           │
+│  │  + MASQUERADE     │            └────────┬─────────┘           │
+│  └──────────────────┘                      │                     │
+│                                             ▼                    │
+│                                    ┌──────────────────┐          │
+│                                    │    wstunnel      │          │
+│                                    │  WS → nginx:80   │          │
+│                                    └────────┬─────────┘          │
+│                                             │                     │
+└─────────────────────────────────────────────┼────────────────────┘
+                                               │
+                                               ▼
+                                      ┌──────────────────┐
+                                      │  nginx (nginx:80) │
+                                      │  proxy_pass →     │
+                                      │  p1.stt.ru:443    │
+                                      └────────┬─────────┘
+                                               │
+                                          вышестоящий прокси
+                                               │
+                                               ▼
+                                            ИНТЕРНЕТ
 ```
 
-3 (три) цепочки iptables:
+Логика маршрутизации IP (цепочка iptables nat FW_REDIRECT):
+1. dst-type LOCAL → RETURN
+2. source из Docker bridge (`172.16.0.0/12`) → RETURN (предотвращает петли прокси)
+3. dst в приватные диапазоны → RETURN
+4. dst в ipset russian-ips (данные RIPE) → RETURN
+5. dst порт 12345 (сам redsocks) → RETURN
+6. весь остальной TCP → REDIRECT на `:12345` (redsocks)
+7. dst порт 53 (UDP/TCP) → REDIRECT на `:53` (unbound)
 
-1. **`FW_REDIRECT`** — PREROUTING. Встречает трафик LAN-клиентов.
-2. **`FW_OUTPUT`** — OUTPUT. Обрабатывает трафик с самого хоста.
-3. **DOCKER-USER** — FORWARD. Разрешает транзитный трафик LAN.
+## Сервисы
 
-Логика для FW_REDIRECT и FW_OUTPUT идентична:
+| Сервис | Образ | Роль |
+|--------|-------|------|
+| `fw` | кастомный (alpine + iptables + redsocks) | правила iptables, прозрачное перенаправление, определение российских IP |
+| `wstunnel` | ghcr.io/erebe/wstunnel | SOCKS5-прокси через WebSocket к вышестоящему прокси |
+| `nginx` | docker.io/nginx:alpine | WebSocket-реверс-прокси к вышестоящему прокси |
+| `unbound` | кастомный (alpine + unbound) | DNS-over-TLS форвардер |
 
-1. `dst-type LOCAL` → RETURN
-2. `src 172.16.0.0/12` → RETURN (Docker bridge — предотвращение петли)
-3. Приватные диапазоны (10/8, 172.16/12, 192.168/16) → RETURN
-4. `match-set russian-ips dst` → RETURN
-5. `match-set tor-exclude dst` → RETURN
-6. `dport 12346` или `9050` → RETURN (не перехватывать свой трафик)
-7. `dport 53` → REDIRECT `:53` (unbound)
-8. Весь остальной TCP → REDIRECT `:12346` (redsocks → Tor)
+## Устройство fw
 
----
+`fw` — центральный сервис, который делает трафик прозрачным. Он запускается с `network_mode: host` и правами `NET_ADMIN` + `NET_RAW`, чтобы управлять iptables на хосте.
 
-## КОМПОНЕНТЫ
+### Жизненный цикл
 
-| Компонент | Роль |
-|-----------|------|
-| **`fw`** | Правила iptables + redsocks. Работает в `network_mode: host`. Права `NET_ADMIN` + `NET_RAW`. Очищает старые правила через while-цикл (идемпотентность). Загружает ipset из файлов. Запускает redsocks на порту 12346, апстрим — Tor :9050. |
-| **`tor`** | Единственный бэкенд. Мосты obfs4. SOCKS5 :9050. |
-| **`unbound`** | DNS-over-TLS форвардер. Все DNS-запросы (порт 53) перехватываются и направляются сюда. `.ru` → Яндекс DNS. Остальное → Cloudflare + Google. |
+При старте `entrypoint.sh` выполняет:
 
----
+1. **Очистка старых правил** — удаляет цепочку `FW_REDIRECT` и правило OUTPUT, если они остались от предыдущего запуска. При остановке контейнера cleanup удаляет все свои правила через `trap`.
 
-## QUIC — UDP, КОТОРЫЙ ДУМАЕТ, ЧТО ОН ВЫШЕ TCP
+2. **Загрузка российских IP** — скачивает с RIPE (`stat.ripe.net`) все IPv4-диапазоны, принадлежащие РФ, и загружает их в ipset `russian-ips`. Если RIPE недоступен, используется пустой ipset, и весь трафик пойдёт через туннель (некритично, но неоптимально).
 
-QUIC (UDP/443) не может быть перехвачен SOCKS5-прокси. Без блокировки браузер устанавливает прямое соединение с иностранным сервером, минуя Tor.
+3. **Запуск redsocks** — стартует в фоне на порту `12345`. redsocks принимает переадресованный iptables трафик и перенаправляет его в SOCKS5-прокси wstunnel на порту `41080`.
 
-Правила:
+4. **Применение iptables** — настройка всех правил (см. ниже).
+
+### Наборы правил iptables
+
+#### 1. OUTPUT — трафик с самого хоста
+
+Перехватывает TCP-пакеты, созданные процессами на хосте (не в контейнерах Docker). Логика:
+
+1. `-d 127.0.0.0/8` → RETURN — не трогать localhost
+2. `-d 10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` → RETURN — не трогать частные диапазоны
+3. `match-set russian-ips dst` → RETURN — российские адреса не проксировать
+4. `--dport 12345` → RETURN — не перехватывать трафик, идущий в сам redsocks (предотвращает петлю)
+5. Всё остальное TCP → REDIRECT `:12345`
+
+Область действия: только процессы на хосте. Docker-контейнеры (nginx, wstunnel, unbound) не попадают в OUTPUT.
+
+#### 2. PREROUTING — трафик с LAN-клиентов и Docker-контейнеров
+
+Создаётся отдельная цепочка `FW_REDIRECT` и подключается к PREROUTING. Использование отдельной цепочки важно: при сбросе `FW_REDIRECT` мы не трогаем правила, добавленные Docker'ом в PREROUTING.
+
+Логика прохода пакета:
+
+1. **dst-type LOCAL** → RETURN — если пакет адресован самому хосту, не трогаем
+2. **source `172.16.0.0/12`** → RETURN — все Docker bridge-сети используют этот диапазон. Без этого правила трафик nginx → p1.stt.ru (вышестоящий прокси) попадал бы в петлю: nginx → PREROUTING → REDIRECT → redsocks → wstunnel → nginx → ... → 504 Gateway Timeout
+3. **dst `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`** → RETURN — не перенаправлять трафик внутри локальной сети
+4. **dst в ipset `russian-ips`** → RETURN — российские сайты пропускаем напрямую
+5. **dst port `12345`** → RETURN — не перехватывать трафик к самому redsocks
+6. **dst port `41080` или `9050`** → RETURN — не перехватывать трафик к выбранному SOCKS5-бэкенду (wstunnel или tor, задаётся переменной `PROXY_BACKEND`)
+7. Весь остальной TCP → REDIRECT `:12345` — это иностранные сайты, они уходят в туннель
+7. **UDP/TCP dst port `53`** → REDIRECT `:53` — DNS-запросы клиентов перенаправляются на локальный unbound, даже если у клиента прописан другой DNS
+
+Правило `-s 172.16.0.0/12 -j RETURN` — самый важный фикс. Без него возникает петля:
+- nginx (IP 172.27.0.x) делает proxy_pass к вышестоящему прокси (например, 72.56.102.60:443)
+- Пакет выходит через Docker bridge на хост, попадает в PREROUTING
+- Не матчится ни под одно RETURN-правило (destination — не российский, не приватный)
+- REDIRECT на `:12345` → redsocks → wstunnel → nginx → снова PREROUTING → ...
+- Цикл прерывается только по таймауту nginx (5 сек) → 504
+
+#### 3. FORWARD — разрешение транзитного трафика
+
+Правила добавляются в цепочку `DOCKER-USER` (рекомендованный Docker'ом способ для пользовательских правил форвардинга):
 
 ```
-FORWARD: UDP/443 !russian-ips !tor-exclude → DROP
-OUTPUT:  UDP/443 !127.0.0.1 !russian-ips !tor-exclude → DROP
+ACCEPT all -- * * 192.168.1.0/24 0.0.0.0/0
+ACCEPT all -- * * 0.0.0.0/0 192.168.1.0/24
 ```
 
-Браузер, не получив ответа по UDP, откатывается на TCP/443. TCP/443 перехватывается правилами PREROUTING/OUTPUT и направляется в Tor.
+Без этих правил FORWARD policy DROP отбрасывает любой транзитный трафик, и клиенты из LAN не могут выходить в интернет (даже на российские сайты напрямую).
 
-QUIC к российским адресам и адресам из tor-exclude работает штатно.
+#### 4. MASQUERADE — SNAT для LAN
 
----
+```
+POSTROUTING -s 192.168.1.0/24 ! -d 192.168.1.0/24 -j MASQUERADE
+```
 
-## ДАННЫЕ
+Заменяет source IP пакетов от LAN-клиентов на IP хоста при выходе во внешнюю сеть. Без этого правила обратные пакеты от yandex.ru не знали бы, как вернуться к 192.168.1.7 (приватный IP не маршрутизируется в интернете).
 
-### `fw/russian-ips.txt`
+### Полный путь пакета
 
-IPv4-диапазоны РФ. Источник: RIPE API. Автоматически обновляется при запуске `fw`. Не редактировать вручную — будет перезаписано.
+**Запрос к yandex.ru с 192.168.1.7 (российский сайт):**
 
-### `fw/tor-exclude-ips.txt`
+```
+клиент → хост (шлюз) → PREROUTING:
+  dst-type LOCAL? нет
+  s=192.168.1.7, src 172.16.0.0/12? нет
+  dst 10/8,172.16/12,192.168/16? нет
+  dst russian-ips? ДА! → RETURN
+→ FORWARD (DOCKER-USER: ACCEPT) → POSTROUTING (MASQUERADE)
+→ интернет → yandex.ru
+```
 
-Ваш список исключений. Один IP или CIDR на строку, `#` — комментарий. Адреса из этого списка НЕ направляются в Tor.
+**Запрос к opencode.ai с хоста (иностранный сайт):**
 
-Полезно для:
-- Сервисов, блокирующих Tor exit-ноды
-- Сервисов, требующих прямого доступа без задержек Tor
-- IP-адресов, которые должны быть доступны напрямую вне зависимости от геолокации
+```
+процесс на хосте → OUTPUT:
+  dst 127/8, 10/8, 172.16/12, 192.168/16? нет
+  dst russian-ips? нет
+  --dport 12345? нет
+→ REDIRECT :12345 → redsocks (loopback)
+→ socks5 :41080 → wstunnel → WebSocket → nginx:80
+→ nginx → proxy_pass p1.stt.ru:443 → вышестоящий прокси → opencode.ai
+```
 
----
+**DNS-запрос с 192.168.1.7:**
 
-## БЫСТРЫЙ СТАРТ
+```
+клиент → хост → PREROUTING:
+  dst port 53? ДА! → REDIRECT :53 → unbound
+  unbound → DoT (853) → Cloudflare/Google
+  ответ → обратно клиенту (conntrack)
+```
+
+## Требования
+
+- Хост с Linux, поддержка `iptables` + `ipset` (модули ядра: `ip_tables`, `iptable_nat`, `ip_set`, `ip_set_hash_net`)
+- Docker + Docker Compose
+- Сетевой интерфейс для LAN (опционально, для форвардинга клиентов)
+- Учётные данные вышестоящего прокси в `nginx/backends.list`
+- Порт 53 должен быть свободен на хосте (unbound)
+
+## Быстрый старт
 
 ```bash
 # 1. Клонировать и подготовить
@@ -95,96 +188,142 @@ git clone <repo> goldenroute
 cd goldenroute
 cp .env.example .env
 
-# 2. Получить свежие мосты Tor
-#    https://bridges.torproject.org → tor/bridges.txt
+# 2. Отредактировать .env (важен только UNBOUND_PORT=53, остальное по умолчанию)
+#    Если меняете UNBOUND_PORT — поправьте правила PREROUTING
 
-# 3. Добавить исключения (опционально)
-#    fw/tor-exclude-ips.txt
+# 3. Заполнить nginx/backends.list учётными данными вышестоящего прокси
+#    Формат: <хост>:<порт>;<base64_auth>;[<server_name>]
+#    Пример: p1.stt.ru:443;cHJveHlfdXNlcjY6Q2lRYzQwczRwNk92dWlkM0c4TVlESHpIRWxEd2pkYTY=
+#    auth — это "user:password" в base64
 
 # 4. Запустить
 docker compose up -d
+
+# 5. Проверить
+curl -s -o /dev/null -w "%{http_code}" https://yandex.ru   # ожидается 302
+curl -s -o /dev/null -w "%{http_code}" https://opencode.ai   # ожидается 200
 ```
 
-### Настройка клиентов LAN
+## Настройка
 
-На каждом клиенте:
-- **Шлюз по умолчанию**: IP хоста с goldenroute
-- **DNS**: IP хоста (unbound на порту 53)
+### Переменные окружения (`.env`)
 
----
+| Переменная | По умолчанию | Описание |
+|------------|-------------|----------|
+| `UNBOUND_PORT` | `53` | Порт DNS, который слушает unbound |
+| `LL_IPV4_ADDR` | `127.0.0.1` | IP привязки для портов SOCKS5/HTTP (`0.0.0.0` для доступа с LAN) |
+| `LLP_SOCKS5_PROXY` | `41080` | Порт SOCKS5 для ручного использования прокси |
+| `LLP_HTTP_PROXY` | `43128` | Порт HTTP-прокси для ручного использования |
+| `PROXY_BACKEND` | `wstunnel` | Бэкенд для иностранного трафика: `wstunnel` или `tor` |
 
-## КОНФИГУРАЦИЯ
+### Вышестоящий бэкенд (`nginx/backends.list`)
 
-`.env`:
+Формат строки: `<ip_или_хост>[:<порт>];<base64_auth>;[<server_name>]`
 
-| Переменная | По умолчанию | Назначение |
-|------------|-------------|------------|
-| `UNBOUND_PORT` | 53 | Порт DNS |
-| `TOR_SOCKS_PORT` | 9050 | SOCKS5 порт Tor |
-| `TOR_CONTROL_PORT` | 9051 | Control-порт Tor |
-| `TOR_REDSOCKS_PORT` | 12346 | Порт redsocks, принимающий перенаправленный трафик |
-| `LAN_CIDR` | 192.168.1.0/24 | Подсеть LAN |
+- Порт по умолчанию: `443`
+- Auth: `echo -n "user:password" | base64`
+- Server name: используется в SNI и заголовке Host
 
----
+Можно указать несколько бэкендов (по одному на строку); nginx использует `least_conn` балансировку.
 
-## ДИАГНОСТИКА
+### Российские IP (`fw/entrypoint.sh`)
 
-### Tor не забутстрапился
+Диапазоны загружаются динамически с RIPE при старте:
+`https://stat.ripe.net/data/country-resource-list/data.json?resource=RU`
 
+### Переключение бэкенда (`PROXY_BACKEND`)
+
+Переменная `PROXY_BACKEND` в `.env` выбирает SOCKS5-прокси для иностранного трафика:
+
+- `wstunnel` — порт `41080`, трафик идёт через WebSocket-туннель → nginx → вышестоящий прокси (`p1.stt.ru`)
+- `tor` — порт `9050`, трафик идёт через Tor network
+
+После изменения достаточно перезапустить только `fw`:
 ```bash
+docker compose up -d fw
+```
+
+При переключении на `tor` убедитесь, что:
+- Мосты в `tor/bridges.txt` актуальны (получить свежие на https://bridges.torproject.org)
+- У unbound нет жёстких DNSSEC-требований (для обхода блокировок, а не анонимности)
+- **Snowflake не работает** через Docker (WebRTC/UDP не проходит через Docker NAT). Используйте obfs4 bridges.
+
+Проверить, что tor подключился:
+```bash
+# Статус загрузки (100% = готов)
 docker compose logs tor | grep "Bootstrapped"
+
+# Какие мосты используются
+docker compose logs tor | grep "new bridge descriptor"
 ```
 
-Ищите `Bootstrapped 100% (done)`. Если нет — обновите мосты на https://bridges.torproject.org.
-
-### Трафик не идёт через Tor
-
+Перезапустить fw после изменения любого конфига:
 ```bash
-docker compose exec fw iptables -t nat -L FW_REDIRECT -n -v
+docker compose up -d fw
 ```
+Контейнер сам сбросит старые iptables-правила (через `trap cleanup`) и применит новые.
 
-Счётчик `REDIRECT tcp --dport 12346` должен расти.
+### DNS (`unbound/unbound.conf`)
 
-### QUIC не блокируется
+- Глобальный форвард: Google (8.8.8.8, 8.8.4.4) + Cloudflare (1.1.1.1, 1.0.0.1) через DoT
+- Форвард для `.ru`: Яндекс DNS (77.88.8.8, 77.88.8.1) через DoT
+- Контроль доступа: разрешены приватные диапазоны, всё остальное запрещено
 
+## Настройка клиентов
+
+### Сам хост
+
+Никакой дополнительной настройки — цепочка OUTPUT обрабатывает локальный трафик.
+
+### LAN-клиенты (192.168.1.0/24)
+
+На каждом клиенте указать:
+- **Шлюз**: `192.168.1.10` (IP хоста)
+- **DNS**: `192.168.1.10` (unbound)
+
+Весь TCP-трафик будет прозрачно перенаправляться. DNS пойдёт через DoT.
+
+Чтобы сменить подсеть LAN, отредактируйте вхождения `192.168.1.0/24` в `fw/entrypoint.sh` (строки 83-84, 89).
+
+### Ручной SOCKS5-прокси (альтернатива)
+
+Используйте `socks5://<хост>:41080` или `http://<хост>:43128` напрямую — wstunnel предоставляет оба протокола.
+
+## Диагностика
+
+### nginx: "host not found in upstream"
+
+nginx зависит от разрешения DNS для имени бэкенда. Если nginx запустился до того, как unbound готов, перезапустите его:
 ```bash
-docker compose exec fw iptables -L FORWARD -n -v | grep "udp dpt:443"
+docker compose restart nginx
 ```
 
-Счётчик DROP должен расти при обращении к иностранным сайтам.
+### wstunnel: HTTP 504 (Gateway Timeout)
 
-### Мосты Tor блокированы
+Возможные причины:
+1. Вышестоящий прокси недоступен — проверьте `nginx/backends.list`
+2. Ошибка разрешения DNS — проверьте логи unbound
+3. Петля прокси — iptables PREROUTING перехватывает трафик nginx→бэкенд (исправлено правилом `-s 172.16.0.0/12 -j RETURN`)
 
+### Правила iptables не применяются
+
+Проверьте логи контейнера fw:
 ```bash
-docker compose up -d --force-recreate tor
+docker compose logs fw
 ```
 
-### DNS не резолвится
-
+Проверьте правила:
 ```bash
-nslookup example.com <IP-хоста>
+docker compose exec fw iptables -t nat -L FW_REDIRECT -v -n
 ```
 
----
+### Трафик с LAN не работает
 
-## ИЗВЕСТНЫЕ ОГРАНИЧЕНИЯ
+- Проверьте `ip_forward = 1` на хосте: `sysctl net.ipv4.ip_forward`
+- Проверьте правила DOCKER-USER: `iptables -L DOCKER-USER -v -n`
+- Проверьте правило MASQUERADE: `iptables -t nat -L POSTROUTING -v -n`
+- Убедитесь, что шлюз и DNS на клиенте указывают на хост
 
-- Только TCP уходит через Tor. UDP (кроме DNS и заблокированного QUIC) идёт напрямую.
-- Snowflake не работает через Docker NAT. Используйте obfs4-мосты.
-- `network_mode: host` обязателен для `fw`.
-- Только IPv4.
+### Диапазоны Docker bridge
 
----
-
-## ТРЕБОВАНИЯ
-
-- Linux: `ip_tables`, `iptable_nat`, `ip_set`, `ip_set_hash_net`
-- Docker + Docker Compose
-- `net.ipv4.ip_forward = 1`
-- Порт 53 свободен на хосте
-
----
-
-BALENCIAGA INFRASTRUCTURE DIVISION
-
-Один маршрут. Tor.
+Docker по умолчанию использует `172.16.0.0/12`. Если Docker daemon настроен на другую подсеть, обновите правило `-s` в `fw/entrypoint.sh`.

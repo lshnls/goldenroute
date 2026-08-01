@@ -1,5 +1,4 @@
 ##=================== /etc/torrc =====================##
-# TOR™ — единственный бэкенд коллекции FW'26. Больше не второй голос — главный.
 # https://www.torproject.org/docs/tor-manual.html.en
 
 # Run Tor as a regular user (do not change this)

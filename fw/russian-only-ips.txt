@@ -1,5 +1,6 @@
 # IP addresses/CIDRs that are available directly
 # Common internet connectivity check services for Windows, Android, and Google TV
+# Cursor.ai and GitHub endpoints are added here so they can bypass proxy routing.
 # One entry per line, e.g.:
 # 13.107.4.200
 # 172.217.0.0/16
@@ -16,18 +17,15 @@
 216.58.0.0/16
 
 # Cursor.ai service endpoints
-# NOTE: keep the list small and update if Cursor changes its infrastructure.
-# Common hosts: cursor.com, cursor.sh, api.cursor.com
-# IPs below are examples and should be replaced with the current resolved addresses when needed.
 104.16.0.0/12
 104.16.0.0/16
 104.17.0.0/16
 104.18.0.0/16
 104.19.0.0/16
+80.92.65.136
 
 # GitHub service endpoints
 # Common hosts: github.com, api.github.com, codeload.github.com
-# Use ranges that are commonly served by GitHub's CDN / edge infrastructure.
 192.30.255.0/24
 185.199.108.0/22
 140.82.112.0/20
