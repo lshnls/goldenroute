@@ -1,0 +1,2 @@
+#<ip>[:<port>];<base64_auth>;[<server_name>]
+address.domain.ru:443;key=

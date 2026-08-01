@@ -18,7 +18,12 @@ services:
       - tor
     volumes:
       - ./fw/russian-ips.txt:/etc/goldenroute/russian-ips.txt
+<<<<<<< HEAD
       - ./fw/tor-exclude-ips.txt:/etc/goldenroute/tor-exclude-ips.txt:ro
+=======
+      - ./fw/russian-only-ips.txt:/etc/goldenroute/russian-only-ips.txt:ro
+      - ./fw/tor-only-ips.txt:/etc/goldenroute/tor-only-ips.txt:ro
+>>>>>>> load_balancing
     environment:
       - TOR_SOCKS_PORT=${TOR_SOCKS_PORT:-9050}
       - TOR_REDSOCKS_PORT=${TOR_REDSOCKS_PORT:-12346}

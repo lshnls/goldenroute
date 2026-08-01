@@ -7,6 +7,7 @@
 set -eu
 set -o pipefail
 
+<<<<<<< HEAD
 CHAIN_NAME="FW_REDIRECT"                       # PREROUTING™ — приговор для трафика LAN
 OUTPUT_CHAIN="FW_OUTPUT"                       # OUTPUT™ — приговор для трафика самого хоста
 LAN_CIDR="${LAN_CIDR:-192.168.1.0/24}"          # Единственная признанная территория
@@ -18,6 +19,17 @@ RIPE_URL="https://stat.ripe.net/data/country-resource-list/data.json?resource=RU
 
 TOR_REDSOCKS_PORT="${TOR_REDSOCKS_PORT:-12346}"  # Единственный порт. Единственный путь наружу.
 TOR_SOCKS_PORT="${TOR_SOCKS_PORT:-9050}"         # Tor слушает здесь — и этого достаточно
+=======
+# Порты и файлы
+RUSSIAN_IPS_FILE="/etc/goldenroute/russian-ips.txt"
+RUSSIAN_ONLY_IPS_FILE="/etc/goldenroute/russian-only-ips.txt"
+TOR_ONLY_IPS_FILE="/etc/goldenroute/tor-only-ips.txt"
+RIPE_URL="https://stat.ripe.net/data/country-resource-list/data.json?resource=RU" # Источник обновления рус. IP
+REDSOCKS_PORT="${REDSOCKS_PORT:-12345}"                   # Порт wstunnel (redsocks)
+TOR_REDSOCKS_PORT="${TOR_REDSOCKS_PORT:-12346}"               # Порт Tor (redsocks)
+TOR_SOCKS_PORT="${TOR_SOCKS_PORT:-9050}"   # Порт Tor
+WSTUNNEL_SOCKS_PORT="${LLP_SOCKS5_PROXY:-41080}" # Порт wstunnel
+>>>>>>> load_balancing
 
 RULES_APPLIED=0
 TOR_REDSOCKS_PID=""
@@ -127,9 +139,38 @@ append_proxy_rules() {
 cleanup_chain "$CHAIN_NAME" PREROUTING
 cleanup_chain "$OUTPUT_CHAIN" OUTPUT
 
+<<<<<<< HEAD
 load_ipset russian-ips "$RUSSIAN_IPS_FILE"
 load_ipset tor-exclude "$TOR_EXCLUDE_IPS_FILE"
 update_russian_ips &
+=======
+# Запуск прокси, если он включён
+if proxy_enabled; then
+    echo "[fw] Proxy active — balancing: wstunnel ${WSTUNNEL_BALANCE}% / tor ${TOR_BALANCE}%"
+    load_ipset russian-ips "$RUSSIAN_IPS_FILE"
+    if [ -s "$RUSSIAN_ONLY_IPS_FILE" ]; then
+        sed "/^#/d; /^$/d; s/^/add russian-ips /" "$RUSSIAN_ONLY_IPS_FILE" | ipset restore -!
+        count=$(ipset list russian-ips | sed -n 's/^Number of entries: //p')
+        echo "[fw] russian-ips merged with $RUSSIAN_ONLY_IPS_FILE: ${count:-0} entries"
+    else
+        echo "[fw] $RUSSIAN_ONLY_IPS_FILE not found or empty"
+    fi
+    update_russian_ips &
+    if [ "$WSTUNNEL_BALANCE" -gt 0 ]; then
+        write_redsocks_config /tmp/redsocks.conf "$REDSOCKS_PORT" "$WSTUNNEL_SOCKS_PORT"
+        start_redsocks redsocks /tmp/redsocks.conf
+        REDSOCKS_PID="$STARTED_PID"
+    fi
+    if [ "$TOR_BALANCE" -gt 0 ]; then
+        write_redsocks_config /tmp/redsocks-tor.conf "$TOR_REDSOCKS_PORT" "$TOR_SOCKS_PORT"
+        start_redsocks tor-redsocks /tmp/redsocks-tor.conf
+        TOR_REDSOCKS_PID="$STARTED_PID"
+    fi
+else
+    echo "[fw] Proxy disabled — all traffic direct"
+    ipset create russian-ips hash:net 2>/dev/null || true
+fi
+>>>>>>> load_balancing
 
 write_redsocks_config
 start_redsocks
