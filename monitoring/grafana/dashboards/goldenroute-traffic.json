@@ -35,6 +35,21 @@
         },
         "overrides": [
           {
+            "matcher": { "id": "byName", "options": "avg" },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "color": "transparent", "value": null },
+                    { "color": "#73BF69", "value": 0 }
+                  ]
+                }
+              }
+            ]
+          },
+          {
             "matcher": { "id": "byName", "options": "max" },
             "properties": [
               {
@@ -69,6 +84,12 @@
           "refId": "A"
         },
         {
+          "expr": "avg_over_time((sum(irate(goldenroute_traffic_bytes_total{path=\"direct\"}[1m])) * 8)[$__range:5s])",
+          "instant": true,
+          "legendFormat": "avg",
+          "refId": "C"
+        },
+        {
           "expr": "max_over_time((sum(irate(goldenroute_traffic_bytes_total{path=\"direct\"}[1m])) * 8)[$__range:5s])",
           "instant": true,
           "legendFormat": "max",
@@ -95,6 +116,21 @@
           "decimals": 1
         },
         "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "avg" },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "color": "transparent", "value": null },
+                    { "color": "#5794F2", "value": 0 }
+                  ]
+                }
+              }
+            ]
+          },
           {
             "matcher": { "id": "byName", "options": "max" },
             "properties": [
@@ -130,6 +166,12 @@
           "refId": "A"
         },
         {
+          "expr": "avg_over_time((sum(irate(goldenroute_traffic_bytes_total{path=\"wsproxy\"}[1m])) * 8)[$__range:5s])",
+          "instant": true,
+          "legendFormat": "avg",
+          "refId": "C"
+        },
+        {
           "expr": "max_over_time((sum(irate(goldenroute_traffic_bytes_total{path=\"wsproxy\"}[1m])) * 8)[$__range:5s])",
           "instant": true,
           "legendFormat": "max",
@@ -156,6 +198,21 @@
           "decimals": 1
         },
         "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "avg" },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "color": "transparent", "value": null },
+                    { "color": "#F2495C", "value": 0 }
+                  ]
+                }
+              }
+            ]
+          },
           {
             "matcher": { "id": "byName", "options": "max" },
             "properties": [
@@ -189,6 +246,12 @@
           "expr": "sum(irate(goldenroute_traffic_bytes_total{path=\"tor\"}[1m])) * 8",
           "legendFormat": "now",
           "refId": "A"
+        },
+        {
+          "expr": "avg_over_time((sum(irate(goldenroute_traffic_bytes_total{path=\"tor\"}[1m])) * 8)[$__range:5s])",
+          "instant": true,
+          "legendFormat": "avg",
+          "refId": "C"
         },
         {
           "expr": "max_over_time((sum(irate(goldenroute_traffic_bytes_total{path=\"tor\"}[1m])) * 8)[$__range:5s])",
@@ -250,7 +313,7 @@
       "id": 1,
       "options": {
         "legend": {
-          "calcs": ["lastNotNull", "max"],
+          "calcs": ["lastNotNull", "mean", "max"],
           "displayMode": "table",
           "placement": "bottom",
           "showLegend": true,
@@ -330,7 +393,7 @@
       "id": 2,
       "options": {
         "legend": {
-          "calcs": ["lastNotNull", "max"],
+          "calcs": ["lastNotNull", "mean", "max"],
           "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
@@ -519,5 +582,5 @@
   "timezone": "browser",
   "title": "Goldenroute traffic",
   "uid": "goldenroute-traffic",
-  "version": 13
+  "version": 14
 }
