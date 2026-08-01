@@ -14,6 +14,8 @@ services:
   wstunnel:
     image: ghcr.io/erebe/wstunnel:latest
     restart: unless-stopped
+    depends_on:
+      - nginx
     environment:
       LL_IPV4_ADDR: "${LL_IPV4_ADDR:-127.0.0.1}"
       LLP_SOCKS5_PROXY: "${LLP_SOCKS5_PROXY:-41080}"
@@ -37,7 +39,11 @@ services:
     restart: unless-stopped
     depends_on:
       - unbound
+      - nginx
+      - wstunnel
+      - tor
     volumes:
+      - ./fw/entrypoint.sh:/entrypoint.sh:ro
       - ./fw/russian-ips.txt:/etc/goldenroute/russian-ips.txt
       - ./fw/russian-only-ips.txt:/etc/goldenroute/russian-only-ips.txt:ro
       - ./fw/tor-only-ips.txt:/etc/goldenroute/tor-only-ips.txt:ro
