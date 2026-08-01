@@ -96,8 +96,61 @@ services:
       - ./tor/bridges.txt:/etc/tor/bridges.txt:ro
       - tor_data:/var/lib/tor
 
+  iptables-exporter:
+    build:
+      context: ./monitoring/exporter
+      dockerfile: Dockerfile
+    network_mode: host
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    restart: unless-stopped
+    environment:
+      - EXPORTER_LISTEN=0.0.0.0
+      - EXPORTER_PORT=${EXPORTER_PORT:-9101}
+      - EXPORTER_INTERVAL=${EXPORTER_INTERVAL:-5}
+
+  prometheus:
+    image: docker.io/prom/prometheus:v2.54.1
+    network_mode: host
+    restart: unless-stopped
+    depends_on:
+      - iptables-exporter
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.listen-address=0.0.0.0:9090
+      - --web.enable-lifecycle
+
+  grafana:
+    image: docker.io/grafana/grafana:11.2.0
+    network_mode: host
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    environment:
+      - GF_SERVER_HTTP_ADDR=0.0.0.0
+      - GF_SERVER_HTTP_PORT=${GRAFANA_PORT:-3000}
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/goldenroute-connections.json
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+
 volumes:
   unbound_data:
     driver: local
   tor_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
     driver: local

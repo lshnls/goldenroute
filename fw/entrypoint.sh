@@ -6,6 +6,9 @@
 CHAIN_NAME="FW_REDIRECT"              # Цепочка, которая перенаправляет трафик
 OUTPUT_CHAIN="FW_OUTPUT"              # Цепочка обработки исходящего трафика
 LB_CHAIN="FW_LB"                      # Цепочка балансировки между прокси
+ACC_DIRECT="FW_ACC_DIRECT"            # filter: учёт байт/пакетов Direct
+ACC_WSPROXY="FW_ACC_WSPROXY"          # filter: учёт байт в redsocks wstunnel
+ACC_TOR="FW_ACC_TOR"                  # filter: учёт байт в redsocks tor
 LAN_CIDR="${LAN_CIDR:-192.168.1.0/24}" # Локальная подсеть (по умолчанию 192.168.1.0/24)
 
 # Порты и файлы
@@ -102,12 +105,63 @@ cleanup_quic_rules() {
     while iptables -D OUTPUT -p udp --dport 443 ! -s 127.0.0.1 -m set ! --match-set russian-ips dst -j DROP 2>/dev/null; do :; done
 }
 
+# Учёт трафика (filter): Direct по ipset, WSProxy/Tor — INPUT на порты redsocks после REDIRECT
+destroy_filter_chain() {
+    chain="$1"
+    iptables -F "$chain" 2>/dev/null || true
+    iptables -X "$chain" 2>/dev/null || true
+}
+
+cleanup_accounting_rules() {
+    while iptables -D INPUT -p tcp --dport "$REDSOCKS_PORT" -j "$ACC_WSPROXY" 2>/dev/null; do :; done
+    while iptables -D OUTPUT -p tcp --sport "$REDSOCKS_PORT" -j "$ACC_WSPROXY" 2>/dev/null; do :; done
+    while iptables -D INPUT -p tcp --dport "$TOR_REDSOCKS_PORT" -j "$ACC_TOR" 2>/dev/null; do :; done
+    while iptables -D OUTPUT -p tcp --sport "$TOR_REDSOCKS_PORT" -j "$ACC_TOR" 2>/dev/null; do :; done
+    while iptables -D OUTPUT -m set --match-set russian-only-ips dst -j "$ACC_DIRECT" 2>/dev/null; do :; done
+    while iptables -D OUTPUT -m set --match-set russian-ips dst -j "$ACC_DIRECT" 2>/dev/null; do :; done
+    while iptables -D INPUT -m set --match-set russian-only-ips src -j "$ACC_DIRECT" 2>/dev/null; do :; done
+    while iptables -D INPUT -m set --match-set russian-ips src -j "$ACC_DIRECT" 2>/dev/null; do :; done
+    while iptables -D FORWARD -m set --match-set russian-only-ips dst -j "$ACC_DIRECT" 2>/dev/null; do :; done
+    while iptables -D FORWARD -m set --match-set russian-ips dst -j "$ACC_DIRECT" 2>/dev/null; do :; done
+    while iptables -D FORWARD -m set --match-set russian-only-ips src -j "$ACC_DIRECT" 2>/dev/null; do :; done
+    while iptables -D FORWARD -m set --match-set russian-ips src -j "$ACC_DIRECT" 2>/dev/null; do :; done
+    destroy_filter_chain "$ACC_DIRECT"
+    destroy_filter_chain "$ACC_WSPROXY"
+    destroy_filter_chain "$ACC_TOR"
+}
+
+setup_accounting_rules() {
+    cleanup_accounting_rules
+    for chain in "$ACC_DIRECT" "$ACC_WSPROXY" "$ACC_TOR"; do
+        iptables -N "$chain" 2>/dev/null || true
+        iptables -F "$chain"
+        iptables -A "$chain" -j RETURN
+    done
+    # Proxied: both directions on redsocks ports (after nat REDIRECT).
+    # INPUT dport = client→redsocks; OUTPUT sport = redsocks→client (downloads).
+    iptables -I INPUT -p tcp --dport "$REDSOCKS_PORT" -j "$ACC_WSPROXY"
+    iptables -I OUTPUT -p tcp --sport "$REDSOCKS_PORT" -j "$ACC_WSPROXY"
+    iptables -I INPUT -p tcp --dport "$TOR_REDSOCKS_PORT" -j "$ACC_TOR"
+    iptables -I OUTPUT -p tcp --sport "$TOR_REDSOCKS_PORT" -j "$ACC_TOR"
+    # Direct: both directions (dst = to RU, src = replies from RU).
+    iptables -I OUTPUT -m set --match-set russian-only-ips dst -j "$ACC_DIRECT"
+    iptables -I OUTPUT -m set --match-set russian-ips dst -j "$ACC_DIRECT"
+    iptables -I INPUT -m set --match-set russian-only-ips src -j "$ACC_DIRECT"
+    iptables -I INPUT -m set --match-set russian-ips src -j "$ACC_DIRECT"
+    iptables -I FORWARD -m set --match-set russian-only-ips dst -j "$ACC_DIRECT"
+    iptables -I FORWARD -m set --match-set russian-ips dst -j "$ACC_DIRECT"
+    iptables -I FORWARD -m set --match-set russian-only-ips src -j "$ACC_DIRECT"
+    iptables -I FORWARD -m set --match-set russian-ips src -j "$ACC_DIRECT"
+    echo "[fw] traffic accounting enabled ($ACC_DIRECT / $ACC_WSPROXY / $ACC_TOR), bidirectional"
+}
+
 cleanup_all_rules() {
     cleanup_chain "$CHAIN_NAME" PREROUTING
     cleanup_chain "$OUTPUT_CHAIN" OUTPUT
     destroy_nat_chain "$LB_CHAIN"
     cleanup_lan_rules
     cleanup_quic_rules
+    cleanup_accounting_rules
 }
 
 # Основная процедура завершения
@@ -345,6 +399,8 @@ if proxy_enabled; then
     iptables -A FORWARD -p udp --dport 443 -m set ! --match-set russian-ips dst -j DROP
     iptables -A OUTPUT -p udp --dport 443 ! -s 127.0.0.1 -m set ! --match-set russian-ips dst -j DROP
 fi
+
+setup_accounting_rules
 
 RULES_APPLIED=1
 echo "[fw] Firewall ready"
