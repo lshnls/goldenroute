@@ -43,6 +43,7 @@ services:
       - unbound
     volumes:
       - ./fw/russian-ips.txt:/etc/goldenroute/russian-ips.txt
+      - ./fw/russian-only-ips.txt:/etc/goldenroute/russian-only-ips.txt:ro
       - ./fw/tor-only-ips.txt:/etc/goldenroute/tor-only-ips.txt:ro
     environment:
 #      - PROXY_BACKEND=${PROXY_BACKEND:-wstunnel} # obsolete

@@ -10,6 +10,7 @@ LAN_CIDR="${LAN_CIDR:-192.168.1.0/24}" # Локальная подсеть (по
 
 # Порты и файлы
 RUSSIAN_IPS_FILE="/etc/goldenroute/russian-ips.txt"
+RUSSIAN_ONLY_IPS_FILE="/etc/goldenroute/russian-only-ips.txt"
 TOR_ONLY_IPS_FILE="/etc/goldenroute/tor-only-ips.txt"
 RIPE_URL="https://stat.ripe.net/data/country-resource-list/data.json?resource=RU" # Источник обновления рус. IP
 REDSOCKS_PORT="${REDSOCKS_PORT:-12345}"                   # Порт wstunnel (redsocks)
@@ -220,6 +221,13 @@ load_ipset tor-only "$TOR_ONLY_IPS_FILE"
 if proxy_enabled; then
     echo "[fw] Proxy active — balancing: wstunnel ${WSTUNNEL_BALANCE}% / tor ${TOR_BALANCE}%"
     load_ipset russian-ips "$RUSSIAN_IPS_FILE"
+    if [ -s "$RUSSIAN_ONLY_IPS_FILE" ]; then
+        sed "/^#/d; /^$/d; s/^/add russian-ips /" "$RUSSIAN_ONLY_IPS_FILE" | ipset restore -!
+        count=$(ipset list russian-ips | sed -n 's/^Number of entries: //p')
+        echo "[fw] russian-ips merged with $RUSSIAN_ONLY_IPS_FILE: ${count:-0} entries"
+    else
+        echo "[fw] $RUSSIAN_ONLY_IPS_FILE not found or empty"
+    fi
     update_russian_ips &
     if [ "$WSTUNNEL_BALANCE" -gt 0 ]; then
         write_redsocks_config /tmp/redsocks.conf "$REDSOCKS_PORT" "$WSTUNNEL_SOCKS_PORT"
