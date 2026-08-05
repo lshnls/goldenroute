@@ -6,6 +6,7 @@
 CHAIN_NAME="FW_REDIRECT"              # Цепочка, которая перенаправляет трафик
 OUTPUT_CHAIN="FW_OUTPUT"              # Цепочка обработки исходящего трафика
 LB_CHAIN="FW_LB"                      # Цепочка балансировки между прокси
+TOR_ONLY_CHAIN="FW_TOR_ONLY"          # Принудительный путь для tor-only (Tor или fallback)
 ACC_DIRECT="FW_ACC_DIRECT"            # filter: учёт байт/пакетов Direct
 ACC_WSPROXY="FW_ACC_WSPROXY"          # filter: учёт байт в redsocks wstunnel
 ACC_TOR="FW_ACC_TOR"                  # filter: учёт байт в redsocks tor
@@ -159,6 +160,7 @@ cleanup_all_rules() {
     cleanup_chain "$CHAIN_NAME" PREROUTING
     cleanup_chain "$OUTPUT_CHAIN" OUTPUT
     destroy_nat_chain "$LB_CHAIN"
+    destroy_nat_chain "$TOR_ONLY_CHAIN"
     cleanup_lan_rules
     cleanup_quic_rules
     cleanup_accounting_rules
@@ -181,13 +183,56 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # Нужен ли tor-redsocks (баланс > 0 или непустой tor-only)
+tor_only_file_has_entries() {
+    [ -s "$TOR_ONLY_IPS_FILE" ] || return 1
+    # Реальные адреса/сети (не комментарии и не пустые строки)
+    grep -qE '^[0-9]' "$TOR_ONLY_IPS_FILE"
+}
+
 tor_only_has_entries() {
     count=$(ipset list tor-only 2>/dev/null | sed -n 's/^Number of entries: //p')
-    [ "${count:-0}" -gt 0 ]
+    [ "${count:-0}" -gt 0 ] || tor_only_file_has_entries
 }
 
 tor_redsocks_needed() {
     [ "${TOR_BALANCE:-0}" -gt 0 ] || tor_only_has_entries
+}
+
+port_open() {
+    nc -z -w2 127.0.0.1 "$1" 2>/dev/null
+}
+
+wait_for_port() {
+    port="$1"
+    tries="${2:-30}"
+    i=0
+    while [ "$i" -lt "$tries" ]; do
+        port_open "$port" && return 0
+        i=$((i + 1))
+        sleep 1
+    done
+    return 1
+}
+
+# Куда слать tor-only: Tor (:12346) или fallback на wstunnel (:12345)
+configure_tor_only() {
+    ensure_nat_chain_exists "$TOR_ONLY_CHAIN" || return 1
+    reset_nat_chain "$TOR_ONLY_CHAIN" || return 1
+
+    if [ "$TOR_REDSOCKS_ENABLED" = "1" ] && port_open "$TOR_SOCKS_PORT" && port_open "$TOR_REDSOCKS_PORT"; then
+        iptables -t nat -A "$TOR_ONLY_CHAIN" -p tcp -j REDIRECT --to-ports "$TOR_REDSOCKS_PORT"
+        return 0
+    fi
+
+    # Tor недоступен: чтобы tor-only не уходил в blackhole при TOR_BALANCE=0
+    if port_open "$REDSOCKS_PORT"; then
+        echo "[fw] warning: Tor unavailable — tor-only temporarily via wstunnel(:$REDSOCKS_PORT)" >&2
+        iptables -t nat -A "$TOR_ONLY_CHAIN" -p tcp -j REDIRECT --to-ports "$REDSOCKS_PORT"
+        return 0
+    fi
+
+    echo "[fw] warning: no backend for tor-only (Tor and wstunnel down)" >&2
+    return 1
 }
 
 # Управление IPSET‑ами
@@ -306,11 +351,19 @@ healthcheck_loop() {
         wstunnel=false
         tor=false
         # Проверка доступности wstunnel / redsocks
-        [ "$WSTUNNEL_BALANCE" -gt 0 ] && \
-            nc -z -w2 127.0.0.1 "$WSTUNNEL_SOCKS_PORT" 2>/dev/null && wstunnel=true
-        # Tor только если tor-redsocks реально запущен
-        [ "$TOR_REDSOCKS_ENABLED" = "1" ] && \
-            nc -z -w2 127.0.0.1 "$TOR_SOCKS_PORT" 2>/dev/null && tor=true
+        [ -n "${REDSOCKS_PID:-}" ] && port_open "$WSTUNNEL_SOCKS_PORT" && port_open "$REDSOCKS_PORT" && wstunnel=true
+        # Tor: SOCKS + tor-redsocks listener
+        [ "$TOR_REDSOCKS_ENABLED" = "1" ] && port_open "$TOR_SOCKS_PORT" && port_open "$TOR_REDSOCKS_PORT" && tor=true
+
+        # tor-only: всегда держим рабочий backend (Tor или fallback на wstunnel)
+        if tor_only_has_entries; then
+            configure_tor_only || true
+        fi
+
+        if ! proxy_enabled; then
+            continue
+        fi
+
         # Перезапуск цепочки, чтобы избежать дублирования правил
         if ! reset_nat_chain "$LB_CHAIN"; then
             echo "[fw] warning: failed to reset $LB_CHAIN; retrying healthcheck later" >&2
@@ -354,6 +407,9 @@ fi
 
 # tor-redsocks: для баланса Tor и/или для tor-only (даже при TOR_BALANCE=0)
 if tor_redsocks_needed; then
+    if ! wait_for_port "$TOR_SOCKS_PORT" 45; then
+        echo "[fw] warning: Tor SOCKS :$TOR_SOCKS_PORT not ready yet" >&2
+    fi
     write_redsocks_config /tmp/redsocks-tor.conf "$TOR_REDSOCKS_PORT" "$TOR_SOCKS_PORT"
     start_redsocks tor-redsocks /tmp/redsocks-tor.conf
     TOR_REDSOCKS_PID="$STARTED_PID"
@@ -364,8 +420,10 @@ fi
 iptables -t nat -N "$OUTPUT_CHAIN" 2>/dev/null || true
 iptables -t nat -I OUTPUT -j "$OUTPUT_CHAIN"
 append_common_returns "$OUTPUT_CHAIN"
-if [ "$TOR_REDSOCKS_ENABLED" = "1" ]; then
-    iptables -t nat -A "$OUTPUT_CHAIN" -m set --match-set tor-only dst -p tcp -j REDIRECT --to-ports "$TOR_REDSOCKS_PORT"
+if tor_only_has_entries; then
+    ensure_nat_chain_exists "$TOR_ONLY_CHAIN"
+    iptables -t nat -A "$OUTPUT_CHAIN" -m set --match-set tor-only dst -p tcp -j "$TOR_ONLY_CHAIN"
+    configure_tor_only || true
 fi
 if proxy_enabled; then
     ensure_nat_chain_exists "$LB_CHAIN"
@@ -378,14 +436,15 @@ iptables -t nat -I PREROUTING -j "$CHAIN_NAME"
 iptables -t nat -A "$CHAIN_NAME" -m addrtype --dst-type LOCAL -j RETURN
 iptables -t nat -A "$CHAIN_NAME" -s 172.16.0.0/12 -j RETURN
 append_common_returns "$CHAIN_NAME"
-if [ "$TOR_REDSOCKS_ENABLED" = "1" ]; then
-    iptables -t nat -A "$CHAIN_NAME" -m set --match-set tor-only dst -p tcp -j REDIRECT --to-ports "$TOR_REDSOCKS_PORT"
+if tor_only_has_entries; then
+    ensure_nat_chain_exists "$TOR_ONLY_CHAIN"
+    iptables -t nat -A "$CHAIN_NAME" -m set --match-set tor-only dst -p tcp -j "$TOR_ONLY_CHAIN"
 fi
 proxy_enabled && append_proxy_rules "$CHAIN_NAME"
 
-# Запуск health‑check в фоне, если прокси включён
-if proxy_enabled; then
-    configure_lb
+# Запуск health‑check: нужен для LB и/или для tor-only fallback
+if proxy_enabled || tor_only_has_entries; then
+    proxy_enabled && configure_lb
     healthcheck_loop &
     HEALTH_PID=$!
 fi
@@ -410,8 +469,13 @@ fi
 RULES_APPLIED=1
 echo "[fw] Firewall ready"
 proxy_enabled && echo "       Balancing: wstunnel(:$REDSOCKS_PORT) = ${WSTUNNEL_BALANCE}% / tor(:$TOR_REDSOCKS_PORT) = ${TOR_BALANCE}%"
-[ "$TOR_REDSOCKS_ENABLED" = "1" ] && [ "${TOR_BALANCE:-0}" -eq 0 ] && \
-    echo "       tor-redsocks(:$TOR_REDSOCKS_PORT) enabled for tor-only"
+if tor_only_has_entries; then
+    if [ "$TOR_REDSOCKS_ENABLED" = "1" ]; then
+        echo "       tor-only → Tor(:$TOR_REDSOCKS_PORT) (fallback to wstunnel if Tor is down)"
+    else
+        echo "       tor-only → wstunnel(:$REDSOCKS_PORT) (Tor redsocks not started)"
+    fi
+fi
 # Бесконечный цикл удержания контейнера
 while true; do
     sleep 3600
