@@ -1,0 +1,293 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "tags": [],
+      "targetBlank": false,
+      "title": "Traffic",
+      "type": "link",
+      "url": "/d/goldenroute-traffic/goldenroute-traffic"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "tags": [],
+      "targetBlank": false,
+      "title": "Connections",
+      "type": "link",
+      "url": "/d/goldenroute-connections/goldenroute-connections"
+    }
+  ],
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Cumulative download+upload per destination IP since range start. Each IP has its own color.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic-by-name" },
+          "custom": {
+            "axisBorderShow": false,
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": { "group": "A", "mode": "none" }
+          },
+          "min": 0,
+          "unit": "decbytes"
+        }
+      },
+      "gridPos": { "h": 18, "w": 14, "x": 0, "y": 0 },
+      "id": 1,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "tooltip": { "mode": "single", "sort": "none" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "topk(20, sum by (dst) (goldenroute_proxy_dst_bytes_total{direction=~\"in|out\"}) - sum by (dst) (goldenroute_proxy_dst_bytes_total{direction=~\"in|out\"} @ start()))",
+          "legendFormat": "{{dst}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Volume by destination IP",
+      "transparent": true,
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Top 20 by total volume. Download = to client, Upload = from client. Proxy = wsproxy or tor.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic-by-name" },
+          "custom": {
+            "align": "auto",
+            "cellOptions": { "type": "auto" },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "text", "value": null }]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "IP" },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": { "type": "color-text" }
+              },
+              {
+                "id": "color",
+                "value": { "mode": "palette-classic-by-name" }
+              },
+              { "id": "custom.width", "value": 140 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Proxy" },
+            "properties": [
+              { "id": "custom.width", "value": 80 },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "wsproxy": { "text": "WSProxy", "color": "#3274D9", "index": 0 },
+                      "tor": { "text": "Tor", "color": "#E02F44", "index": 1 }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": { "type": "color-text" }
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Download" },
+            "properties": [
+              { "id": "unit", "value": "decbytes" },
+              { "id": "decimals", "value": 2 },
+              { "id": "color", "value": { "mode": "thresholds" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Upload" },
+            "properties": [
+              { "id": "unit", "value": "decbytes" },
+              { "id": "decimals", "value": 2 },
+              { "id": "color", "value": { "mode": "thresholds" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Connections" },
+            "properties": [
+              { "id": "decimals", "value": 0 },
+              { "id": "custom.width", "value": 90 },
+              { "id": "color", "value": { "mode": "thresholds" } }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 18, "w": 10, "x": 14, "y": 0 },
+      "id": 2,
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": false },
+        "showHeader": true,
+        "sortBy": [{ "desc": true, "displayName": "Download" }]
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "label_join(topk(20, sum by (dst, path) (increase(goldenroute_proxy_dst_bytes_total{direction=~\"in|out\"}[$__range]))), \"jk\", \"|\", \"dst\", \"path\")",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "__auto",
+          "refId": "Total"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "label_join(sum by (dst, path) (increase(goldenroute_proxy_dst_bytes_total{direction=\"in\"}[$__range])) or on(dst, path) topk(20, sum by (dst, path) (increase(goldenroute_proxy_dst_bytes_total{direction=~\"in|out\"}[$__range]))) * 0, \"jk\", \"|\", \"dst\", \"path\")",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "__auto",
+          "refId": "Download"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "label_join(sum by (dst, path) (increase(goldenroute_proxy_dst_bytes_total{direction=\"out\"}[$__range])) or on(dst, path) topk(20, sum by (dst, path) (increase(goldenroute_proxy_dst_bytes_total{direction=~\"in|out\"}[$__range]))) * 0, \"jk\", \"|\", \"dst\", \"path\")",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "__auto",
+          "refId": "Upload"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "editorMode": "code",
+          "expr": "label_join(sum by (dst, path) (increase(goldenroute_proxy_dst_flows_total[$__range])) or on(dst, path) topk(20, sum by (dst, path) (increase(goldenroute_proxy_dst_bytes_total{direction=~\"in|out\"}[$__range]))) * 0, \"jk\", \"|\", \"dst\", \"path\")",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "__auto",
+          "refId": "Connections"
+        }
+      ],
+      "title": "Top 20 destinations",
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": { "byField": "jk", "mode": "inner" }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Time 1": true,
+              "Time 2": true,
+              "Time 3": true,
+              "Time 4": true,
+              "__name__": true,
+              "__name__ 1": true,
+              "__name__ 2": true,
+              "__name__ 3": true,
+              "__name__ 4": true,
+              "Value #Total": true,
+              "instance": true,
+              "instance 1": true,
+              "instance 2": true,
+              "instance 3": true,
+              "instance 4": true,
+              "job": true,
+              "job 1": true,
+              "job 2": true,
+              "job 3": true,
+              "job 4": true,
+              "service": true,
+              "service 1": true,
+              "service 2": true,
+              "service 3": true,
+              "service 4": true,
+              "direction": true,
+              "direction 1": true,
+              "direction 2": true,
+              "direction 3": true,
+              "direction 4": true,
+              "jk": true,
+              "jk 1": true,
+              "jk 2": true,
+              "jk 3": true,
+              "jk 4": true,
+              "dst 2": true,
+              "dst 3": true,
+              "dst 4": true,
+              "path 2": true,
+              "path 3": true,
+              "path 4": true
+            },
+            "indexByName": {
+              "dst": 0,
+              "path": 1,
+              "Value #Download": 2,
+              "Value #Upload": 3,
+              "Value #Connections": 4
+            },
+            "renameByName": {
+              "dst": "IP",
+              "path": "Proxy",
+              "Value #Download": "Download",
+              "Value #Upload": "Upload",
+              "Value #Connections": "Connections"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [{ "field": "Download", "desc": true }]
+          }
+        }
+      ],
+      "transparent": true,
+      "type": "table"
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "tags": ["goldenroute", "proxy", "destinations"],
+  "templating": { "list": [] },
+  "time": { "from": "now-15m", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Goldenroute top destinations",
+  "uid": "goldenroute-top-dst",
+  "version": 22
+}

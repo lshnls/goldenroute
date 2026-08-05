@@ -9,6 +9,7 @@ RUN chmod +x /app/exporter.py
 ENV EXPORTER_LISTEN=0.0.0.0
 ENV EXPORTER_PORT=9101
 ENV EXPORTER_INTERVAL=5
+ENV EXPORTER_TOP_DST=20
 
 EXPOSE 9101
 CMD ["python3", "/app/exporter.py"]

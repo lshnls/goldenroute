@@ -15,6 +15,17 @@
       "title": "Connections",
       "type": "link",
       "url": "/d/goldenroute-connections/goldenroute-connections"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "tags": [],
+      "targetBlank": false,
+      "title": "Top destinations",
+      "type": "link",
+      "url": "/d/goldenroute-top-dst/goldenroute-top-destinations"
     }
   ],
   "panels": [

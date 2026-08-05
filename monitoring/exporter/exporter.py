@@ -10,6 +10,13 @@ Traffic bytes (filter jump rules into ACC chains, all packets):
   - direction=out: client → path (INPUT dport redsocks / OUTPUT|FORWARD dst russian)
   - direction=in:  path → client (OUTPUT sport redsocks / INPUT|FORWARD src russian)
 
+Top proxy destinations (cumulative from nf_conntrack):
+  - Flows whose reply sport is redsocks :12345 / :12346
+  - Original destination = first dst= in the conntrack tuple
+  - orig bytes (tuple1) = upload/out; reply bytes (tuple2) = download/in
+  - Per-flow deltas → goldenroute_proxy_dst_bytes_total{direction="in"|"out"}
+  - Requires nf_conntrack_acct=1 for byte accounting
+
 FW_LB is periodically flushed by fw healthcheck; this exporter accumulates
 deltas so Prometheus counters remain monotonic.
 """
@@ -17,15 +24,21 @@ deltas so Prometheus counters remain monotonic.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 
 
 LISTEN_HOST = os.environ.get("EXPORTER_LISTEN", "0.0.0.0")
 LISTEN_PORT = int(os.environ.get("EXPORTER_PORT", "9101"))
 SCRAPE_INTERVAL = float(os.environ.get("EXPORTER_INTERVAL", "5"))
+TOP_DST_N = int(os.environ.get("EXPORTER_TOP_DST", "20"))
+MAX_DST_SERIES = int(os.environ.get("EXPORTER_MAX_DST_SERIES", "200"))
+CONNTRACK_PATH = Path(os.environ.get("EXPORTER_CONNTRACK", "/proc/net/nf_conntrack"))
+CONNTRACK_ACCT_PATH = Path("/proc/sys/net/netfilter/nf_conntrack_acct")
 
 PATHS = ("direct", "wsproxy", "tor")
 DIRECTIONS = ("in", "out")
@@ -36,14 +49,59 @@ ACC_TOR = "FW_ACC_TOR"
 ACC_DIRECT = "FW_ACC_DIRECT"
 REDSOCKS_PORT = "12345"
 TOR_REDSOCKS_PORT = "12346"
+PROXY_PORTS = {
+    REDSOCKS_PORT: "wsproxy",
+    TOR_REDSOCKS_PORT: "tor",
+}
+
+_CT_TCP_RE = re.compile(
+    r"\btcp\b.*?"
+    r"src=(?P<src1>\S+)\s+dst=(?P<dst1>\S+)\s+sport=(?P<sport1>\d+)\s+dport=(?P<dport1>\d+)"
+    r"(?:\s+packets=(?P<pkts1>\d+)\s+bytes=(?P<bytes1>\d+))?"
+    r".*?"
+    r"src=(?P<src2>\S+)\s+dst=(?P<dst2>\S+)\s+sport=(?P<sport2>\d+)\s+dport=(?P<dport2>\d+)"
+    r"(?:\s+packets=(?P<pkts2>\d+)\s+bytes=(?P<bytes2>\d+))?",
+)
 
 _lock = threading.Lock()
 _last_raw_conn: dict[str, int] = {p: 0 for p in PATHS}
 _cumulative_conn: dict[str, int] = {p: 0 for p in PATHS}
 _last_raw_bytes: dict[str, int] = {k: 0 for k in BYTE_KEYS}
 _cumulative_bytes: dict[str, int] = {k: 0 for k in BYTE_KEYS}
+# flow_id → (orig_bytes, reply_bytes)
+_last_flow_bytes: dict[str, tuple[int, int]] = {}
+# (path, dst) → cumulative bytes by direction
+_cumulative_dst_bytes_out: dict[tuple[str, str], int] = {}
+_cumulative_dst_bytes_in: dict[tuple[str, str], int] = {}
+_cumulative_dst_flows: dict[tuple[str, str], int] = {}
+_active_dst_conns: dict[tuple[str, str], int] = {}
 _last_error: str = ""
 _last_scrape_ts: float = 0.0
+
+
+def _dst_total_bytes(key: tuple[str, str]) -> int:
+    return _cumulative_dst_bytes_out.get(key, 0) + _cumulative_dst_bytes_in.get(key, 0)
+
+def _ensure_conntrack_acct() -> None:
+    """Enable per-flow byte counters so top-dst can rank by volume."""
+    try:
+        if CONNTRACK_ACCT_PATH.exists() and CONNTRACK_ACCT_PATH.read_text().strip() != "1":
+            CONNTRACK_ACCT_PATH.write_text("1\n")
+            print("[exporter] enabled net.netfilter.nf_conntrack_acct=1", flush=True)
+    except OSError as exc:
+        print(f"[exporter] warning: cannot enable nf_conntrack_acct: {exc}", flush=True)
+
+
+def _is_private_ip(ip: str) -> bool:
+    if ip.startswith("10.") or ip.startswith("127.") or ip.startswith("192.168."):
+        return True
+    if ip.startswith("172."):
+        try:
+            second = int(ip.split(".", 2)[1])
+        except (ValueError, IndexError):
+            return False
+        return 16 <= second <= 31
+    return ip in ("0.0.0.0", "::", "::1")
 
 
 def _run_iptables(args: list[str]) -> str:
@@ -193,12 +251,110 @@ def _read_raw_bytes() -> dict[str, int]:
     return counts
 
 
+def _scrape_proxy_dst() -> None:
+    """Accumulate per-destination bytes/flows from nf_conntrack proxy REDIRECT flows."""
+    global _active_dst_conns
+    if not CONNTRACK_PATH.exists():
+        _active_dst_conns = {}
+        return
+
+    try:
+        text = CONNTRACK_PATH.read_text(errors="replace")
+    except OSError:
+        return
+
+    seen_flows: set[str] = set()
+    active: dict[tuple[str, str], int] = {}
+
+    for line in text.splitlines():
+        if "tcp" not in line:
+            continue
+        if f"sport={REDSOCKS_PORT}" not in line and f"sport={TOR_REDSOCKS_PORT}" not in line:
+            continue
+        m = _CT_TCP_RE.search(line)
+        if not m:
+            continue
+        reply_sport = m.group("sport2")
+        path = PROXY_PORTS.get(reply_sport)
+        if not path:
+            continue
+        dst = m.group("dst1")
+        if _is_private_ip(dst):
+            continue
+
+        sport1 = m.group("sport1")
+        dport1 = m.group("dport1")
+        flow_id = f"{path}|{dst}|{sport1}|{dport1}|{reply_sport}"
+        seen_flows.add(flow_id)
+
+        # tuple1 = original (client → dst) = upload/out
+        # tuple2 = reply (dst → client via redsocks) = download/in
+        orig = int(m.group("bytes1") or 0)
+        reply = int(m.group("bytes2") or 0)
+
+        key = (path, dst)
+        active[key] = active.get(key, 0) + 1
+
+        if flow_id not in _last_flow_bytes:
+            _cumulative_dst_flows[key] = _cumulative_dst_flows.get(key, 0) + 1
+            d_out, d_in = orig, reply
+        else:
+            prev_out, prev_in = _last_flow_bytes[flow_id]
+            d_out = orig - prev_out if orig >= prev_out else orig
+            d_in = reply - prev_in if reply >= prev_in else reply
+        if d_out:
+            _cumulative_dst_bytes_out[key] = _cumulative_dst_bytes_out.get(key, 0) + d_out
+        if d_in:
+            _cumulative_dst_bytes_in[key] = _cumulative_dst_bytes_in.get(key, 0) + d_in
+        _last_flow_bytes[flow_id] = (orig, reply)
+
+    for flow_id in list(_last_flow_bytes):
+        if flow_id not in seen_flows:
+            del _last_flow_bytes[flow_id]
+
+    _active_dst_conns = active
+
+    # Bound cardinality: drop cold destinations with lowest cumulative bytes.
+    all_keys = set(_cumulative_dst_bytes_out) | set(_cumulative_dst_bytes_in) | set(_cumulative_dst_flows)
+    if len(all_keys) > MAX_DST_SERIES:
+        keep = {
+            k
+            for k, _ in sorted(
+                ((k, _dst_total_bytes(k)) for k in all_keys),
+                key=lambda kv: kv[1],
+                reverse=True,
+            )[:MAX_DST_SERIES]
+        }
+        for store in (_cumulative_dst_bytes_out, _cumulative_dst_bytes_in, _cumulative_dst_flows):
+            for key in list(store):
+                if key not in keep:
+                    del store[key]
+
+
+def _dst_series_for_export() -> list[tuple[str, str]]:
+    """Keys to export, preferring currently active then highest cumulative volume."""
+    active_keys = list(_active_dst_conns.keys())
+    all_keys = set(_cumulative_dst_bytes_out) | set(_cumulative_dst_bytes_in) | set(_cumulative_dst_flows)
+    ranked = sorted(all_keys, key=_dst_total_bytes, reverse=True)
+    keys: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for key in active_keys + ranked:
+        if key in seen:
+            continue
+        seen.add(key)
+        keys.append(key)
+        if len(keys) >= MAX_DST_SERIES:
+            break
+    return keys
+
+
 def _accumulate() -> None:
     global _last_error, _last_scrape_ts
     try:
         raw_conn = _read_raw_connections()
         raw_bytes = _read_raw_bytes()
         with _lock:
+            _scrape_proxy_dst()
             for path in PATHS:
                 _bump_delta(_cumulative_conn, _last_raw_conn, path, raw_conn[path])
             for key in BYTE_KEYS:
@@ -215,6 +371,11 @@ def _metrics_body() -> bytes:
     with _lock:
         cumulative_conn = dict(_cumulative_conn)
         cumulative_bytes = dict(_cumulative_bytes)
+        dst_out = dict(_cumulative_dst_bytes_out)
+        dst_in = dict(_cumulative_dst_bytes_in)
+        dst_flows = dict(_cumulative_dst_flows)
+        active_conns = dict(_active_dst_conns)
+        export_keys = _dst_series_for_export()
         err = _last_error
         ts = _last_scrape_ts
 
@@ -237,6 +398,45 @@ def _metrics_body() -> bytes:
             lines.append(
                 f'goldenroute_traffic_bytes_total{{path="{path}",direction="{direction}"}} {value}'
             )
+
+    lines.extend(
+        [
+            "# HELP goldenroute_proxy_dst_bytes_total Cumulative conntrack bytes to proxy destination IP.",
+            "# TYPE goldenroute_proxy_dst_bytes_total counter",
+        ]
+    )
+    for path, dst in export_keys:
+        lines.append(
+            f'goldenroute_proxy_dst_bytes_total{{path="{path}",dst="{dst}",direction="out"}} '
+            f"{dst_out.get((path, dst), 0)}"
+        )
+        lines.append(
+            f'goldenroute_proxy_dst_bytes_total{{path="{path}",dst="{dst}",direction="in"}} '
+            f"{dst_in.get((path, dst), 0)}"
+        )
+    lines.extend(
+        [
+            "# HELP goldenroute_proxy_dst_flows_total Cumulative proxy flows seen to destination IP.",
+            "# TYPE goldenroute_proxy_dst_flows_total counter",
+        ]
+    )
+    for path, dst in export_keys:
+        lines.append(
+            f'goldenroute_proxy_dst_flows_total{{path="{path}",dst="{dst}"}} {dst_flows.get((path, dst), 0)}'
+        )
+
+    lines.extend(
+        [
+            "# HELP goldenroute_proxy_dst_connections Active proxy conntrack flows to destination IP.",
+            "# TYPE goldenroute_proxy_dst_connections gauge",
+        ]
+    )
+    for (path, dst), conns in sorted(active_conns.items(), key=lambda kv: kv[1], reverse=True)[
+        :TOP_DST_N
+    ]:
+        lines.append(
+            f'goldenroute_proxy_dst_connections{{path="{path}",dst="{dst}"}} {conns}'
+        )
 
     lines.extend(
         [
@@ -279,6 +479,7 @@ def _loop() -> None:
 
 
 def main() -> None:
+    _ensure_conntrack_acct()
     _accumulate()
     threading.Thread(target=_loop, name="iptables-scrape", daemon=True).start()
     server = HTTPServer((LISTEN_HOST, LISTEN_PORT), Handler)

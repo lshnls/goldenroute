@@ -402,6 +402,11 @@ fi
 
 setup_accounting_rules
 
+# Per-flow byte counters for top-destination monitoring (conntrack)
+if [ -w /proc/sys/net/netfilter/nf_conntrack_acct ]; then
+    echo 1 > /proc/sys/net/netfilter/nf_conntrack_acct 2>/dev/null || true
+fi
+
 RULES_APPLIED=1
 echo "[fw] Firewall ready"
 proxy_enabled && echo "       Balancing: wstunnel(:$REDSOCKS_PORT) = ${WSTUNNEL_BALANCE}% / tor(:$TOR_REDSOCKS_PORT) = ${TOR_BALANCE}%"
